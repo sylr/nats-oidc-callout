@@ -52,9 +52,9 @@ nfpms:
       - rpm
     bindir: /usr/bin
     contents:
-      - src: ./packaging/systemd/nats-jwt-callout.service
+      - src: ./contribs/systemd/nats-jwt-callout.service
         dst: /usr/lib/systemd/system/nats-jwt-callout.service
-      - src: ./packaging/config.yaml
+      - src: ./contribs/systemd/config.yaml
         dst: /etc/nats-jwt-callout/config.yaml
         type: "config|noreplace"
         file_info:
@@ -69,10 +69,10 @@ nfpms:
           owner: nats-jwt-callout
           group: nats-jwt-callout
     scripts:
-      preinstall: ./packaging/scripts/preinstall.sh
-      postinstall: ./packaging/scripts/postinstall.sh
-      preremove: ./packaging/scripts/preremove.sh
-      postremove: ./packaging/scripts/postremove.sh
+      preinstall: ./contribs/systemd/scripts/preinstall.sh
+      postinstall: ./contribs/systemd/scripts/postinstall.sh
+      preremove: ./contribs/systemd/scripts/preremove.sh
+      postremove: ./contribs/systemd/scripts/postremove.sh
 
 checksum:
   name_template: "checksums.txt"
