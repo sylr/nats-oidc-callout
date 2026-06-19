@@ -1,0 +1,40 @@
+# nats-jwt-callout system configuration (installed to /etc/nats-jwt-callout/).
+#
+# This is a TEMPLATE — the service will not start until you replace the
+# REPLACE_ME values. Generate keys with the `nk` tool (see the project README)
+# and keep the seeds readable only by the nats-jwt-callout user.
+
+nats:
+  url: "tls://127.0.0.1:4222"
+  username: "auth"
+  password: "REPLACE_ME"
+  # ca_cert: "/etc/nats-jwt-callout/ca.pem"
+
+# Account nkey seed (SA…); its public key must equal auth_callout.issuer on the
+# NATS server.
+issuer_account_seed: "REPLACE_ME"
+
+# Curve seed (SX…) matching auth_callout.xkey on the server.
+xkey_seed: "REPLACE_ME"
+
+audiences:
+  - "nats://callout"
+
+signing_algs:
+  - "RS256"
+
+issuers:
+  # GitHub Actions — ready to use; pin the repository in the policy below.
+  - url: "https://token.actions.githubusercontent.com"
+    require_claims:
+      repository_owner: "REPLACE_ME"
+
+  # AWS STS outbound web identity federation — replace the issuer URL with the
+  # value from `aws iam get-outbound-web-identity-federation-info`, or remove.
+  - url: "https://REPLACE-WITH-YOUR-ACCOUNT.tokens.sts.global.api.aws"
+    require_claims:
+      aws.aws_account: "REPLACE_ME"
+
+http_timeout: "10s"
+
+policy_file: "/etc/nats-jwt-callout/policy.yaml"

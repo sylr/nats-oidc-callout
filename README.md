@@ -53,6 +53,16 @@ go build ./cmd/nats-jwt-callout
 # or download a release archive / container image (ghcr.io/sylr/nats-jwt-callout)
 ```
 
+**Packages (deb/rpm).** Releases also ship `.deb` and `.rpm` packages that install
+the binary to `/usr/bin`, a **systemd unit** to `/usr/lib/systemd/system/nats-jwt-callout.service`,
+and config templates to `/etc/nats-jwt-callout/{config,policy}.yaml` (preserved on
+upgrade). They create a `nats-jwt-callout` system user; the service is **not**
+auto-started — edit the config first, then:
+
+```sh
+sudo systemctl enable --now nats-jwt-callout
+```
+
 ## Configure
 
 Generate the keys the server and service share (using the NATS `nk` tool). With

@@ -38,7 +38,47 @@ archives:
     files:
       - README.md
       - LICENSE*
-      - examples/**/*
+      - examples/*
+
+nfpms:
+  - id: packages
+    package_name: nats-jwt-callout
+    vendor: "Sylvain Rabot"
+    homepage: "https://github.com/sylr/nats-jwt-callout"
+    maintainer: "Sylvain Rabot <sylvain@formance.com>"
+    description: "NATS auth callout service authenticating clients via OIDC tokens (AWS, GitHub Actions)."
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
+    contents:
+      - src: ./packaging/systemd/nats-jwt-callout.service
+        dst: /usr/lib/systemd/system/nats-jwt-callout.service
+      - src: ./packaging/config.yaml
+        dst: /etc/nats-jwt-callout/config.yaml
+        type: "config|noreplace"
+        file_info:
+          mode: 0640
+          owner: nats-jwt-callout
+          group: nats-jwt-callout
+      - src: ./examples/policy.yaml
+        dst: /etc/nats-jwt-callout/policy.yaml
+        type: "config|noreplace"
+        file_info:
+          mode: 0640
+          owner: nats-jwt-callout
+          group: nats-jwt-callout
+      - dst: /var/lib/nats-jwt-callout
+        type: dir
+        file_info:
+          mode: 0750
+          owner: nats-jwt-callout
+          group: nats-jwt-callout
+    scripts:
+      preinstall: ./packaging/scripts/preinstall.sh
+      postinstall: ./packaging/scripts/postinstall.sh
+      preremove: ./packaging/scripts/preremove.sh
+      postremove: ./packaging/scripts/postremove.sh
 
 checksum:
   name_template: "checksums.txt"

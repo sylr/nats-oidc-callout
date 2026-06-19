@@ -1,0 +1,36 @@
+[Unit]
+Description=NATS auth callout service (OIDC token authentication)
+Documentation=https://github.com/sylr/nats-jwt-callout
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nats-jwt-callout
+Group=nats-jwt-callout
+ExecStart=/usr/bin/nats-jwt-callout -config /etc/nats-jwt-callout/config.yaml
+Restart=on-failure
+RestartSec=5s
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+# Config holds secrets; keep it read-only to the service.
+ReadOnlyPaths=/etc/nats-jwt-callout
+StateDirectory=nats-jwt-callout
+
+[Install]
+WantedBy=multi-user.target
