@@ -3,6 +3,7 @@
 *.out
 *.test
 .DS_Store
+.envrc.local
 
 # Local secrets — never commit real seeds or creds.
 *.creds
