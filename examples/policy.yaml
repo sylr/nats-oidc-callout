@@ -12,22 +12,6 @@
 # A rule must carry a "strong" identity pin (an exact sub, a literal AWS account,
 # or repository/repository_id/job_workflow_ref) or set allow_broad: true.
 rules:
-  # AWS: a specific IAM role gets full access to the APP account's app.* space.
-  - name: aws-data-role
-    match:
-      issuer: "https://abc123-def456.tokens.sts.global.api.aws"
-      sub: "arn:aws:iam::123456789012:role/DataProcessingRole"
-    grant:
-      account: APP
-      publish:
-        allow: ["app.>"]
-      subscribe:
-        allow: ["app.>", "_INBOX.>"]
-      response:
-        max: 1
-        ttl: "1m"
-      max_expiry: "1h"
-
   # GitHub Actions: this repo (any branch/workflow) gets read-only telemetry.
   # Pin the repository — repository_owner alone would be "broad". Prefer the
   # immutable repository_id where you can, since names can be renamed/transferred.
@@ -43,3 +27,21 @@ rules:
         allow: ["telemetry.>", "_INBOX.>"]
       publish:
         deny: [">"]
+
+  # AWS (STUB): a specific IAM role gets full access to the APP account's app.*
+  # space. Replace the issuer URL (must match the stub in examples/config.yaml)
+  # and the ARN/account with your own. Remove this rule if you don't use AWS.
+  - name: aws-data-role
+    match:
+      issuer: "https://REPLACE-WITH-YOUR-ACCOUNT.tokens.sts.global.api.aws"
+      sub: "arn:aws:iam::000000000000:role/DataProcessingRole"
+    grant:
+      account: APP
+      publish:
+        allow: ["app.>"]
+      subscribe:
+        allow: ["app.>", "_INBOX.>"]
+      response:
+        max: 1
+        ttl: "1m"
+      max_expiry: "1h"

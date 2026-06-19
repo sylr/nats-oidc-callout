@@ -1,7 +1,9 @@
 # Example configuration for nats-jwt-callout.
 #
-# The issuer_account_seed and xkey_seed below are PLACEHOLDERS — generate your
-# own and keep the seeds secret (env/secret store, not committed). See README.
+# The nkeys below are REAL but are throwaway DEMO keys committed for a runnable
+# example — never reuse them in production. Generate your own account + curve
+# keypairs (e.g. `nk -gen account` and `nk -gen curve`) and keep the seeds in a
+# secret store. The seeds here pair with the public keys in examples/server.conf.
 
 # Connection the callout service uses to reach NATS. It authenticates as one of
 # the auth_callout.auth_users so it bypasses the callout itself.
@@ -9,24 +11,24 @@ nats:
   url: "tls://127.0.0.1:4222"
   username: "auth"
   password: "change-me"
-  # For production prefer TLS; the AWS token is a bearer credential.
+  # For production prefer TLS; the OIDC token is a bearer credential.
   # ca_cert: "/etc/nats/ca.pem"
   # client_cert: "/etc/nats/client.pem"
   # client_key: "/etc/nats/client-key.pem"
 
 # Account nkey seed (SA…) whose public key equals auth_callout.issuer on the
 # server. Signs both the response and the user JWT.
-issuer_account_seed: "SAANED...REPLACE_ME"
+issuer_account_seed: "SAAM7VLIAS7RMLKZENKSQKCTJ3SHWEHCSZ7VIBGAZMYXVYMHN2Z7LLZUCE"
 
 # Curve seed (SX…) matching auth_callout.xkey on the server. Required only when
 # the server configures xkey encryption.
-xkey_seed: "SXAID...REPLACE_ME"
+xkey_seed: "SXAJAC6N6ZSQWS4A5XMQ2WISAYSJ7FKO6XUSZ4TOXSI46NHXDBWBQO5YA4"
 
 # Audiences the token's "aud" must contain at least one of.
 audiences:
   - "nats://callout-e2e"
 
-# Allowed JWT signing algorithms. AWS supports RS256 and ES384.
+# Allowed JWT signing algorithms. AWS supports RS256 and ES384; GitHub uses RS256.
 signing_algs:
   - "RS256"
 
@@ -35,15 +37,19 @@ signing_algs:
 # claim values (keys use the flattened namespace: "aws.aws_account",
 # "repository_owner", …).
 issuers:
-  # AWS STS outbound web identity federation.
-  - url: "https://abc123-def456.tokens.sts.global.api.aws"
-    require_claims:
-      aws.aws_account: "123456789012"
-  # GitHub Actions. Owner-level binding only excludes other owners — the policy
-  # must still pin the repository (see examples/policy.yaml).
+  # GitHub Actions — a real, ready-to-use issuer (the URL is fixed for all of
+  # GitHub). Owner-level binding only excludes other owners, so the policy must
+  # still pin the repository (see examples/policy.yaml).
   - url: "https://token.actions.githubusercontent.com"
     require_claims:
       repository_owner: "sylr"
+
+  # AWS STS outbound web identity federation — STUB. Replace the issuer URL with
+  # your account's value from `aws iam get-outbound-web-identity-federation-info`
+  # and set your 12-digit account id. Remove this block if you don't use AWS.
+  - url: "https://REPLACE-WITH-YOUR-ACCOUNT.tokens.sts.global.api.aws"
+    require_claims:
+      aws.aws_account: "000000000000"
 
 # Bound on OIDC discovery / JWKS HTTP calls.
 http_timeout: "10s"
