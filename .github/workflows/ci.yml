@@ -165,10 +165,27 @@ jobs:
         restore-prefixes-first-match: nix-${{ runner.os }}-${{ github.job }}-
         gc-max-store-size-linux: 1G
 
-    # Build the callout image with buildx + the GitHub Actions layer cache so
-    # the golang base and `go mod download`/compile layers persist across runs,
-    # load it into the Docker daemon, then let run.sh skip its own build.
+    # Build the callout image with buildx and persist the Go module + build
+    # caches across runs. The Dockerfile uses BuildKit cache mounts for them;
+    # actions/cache stores those dirs and buildkit-cache-dance injects them into
+    # / extracts them from the build. This caches the compile (the real cost),
+    # which a Docker layer cache cannot once `COPY . .` changes.
     - uses: docker/setup-buildx-action@v4
+    - uses: actions/cache@v4
+      with:
+        path: |
+          go-build-cache
+          go-mod-cache
+        key: ${{ runner.os }}-k8s-image-go-${{ hashFiles('go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-k8s-image-go-
+    - uses: reproducible-containers/buildkit-cache-dance@v3
+      with:
+        cache-map: |
+          {
+            "go-build-cache": "/root/.cache/go-build",
+            "go-mod-cache": "/go/pkg/mod"
+          }
     - uses: docker/build-push-action@v7
       with:
         context: .
@@ -176,8 +193,6 @@ jobs:
         tags: nats-jwt-callout:e2e
         load: true
         provenance: false
-        cache-from: type=gha,scope=k8s-e2e
-        cache-to: type=gha,scope=k8s-e2e,mode=max
 
     - name: Kubernetes service-account-token e2e (kind)
       env:
