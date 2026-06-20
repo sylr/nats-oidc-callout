@@ -10,12 +10,17 @@
 FROM golang:1.26 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
+# The root module replaces lib/awsauth with the in-tree nested module, so its
+# go.mod must be present for `go mod download` to read the build list (the full
+# source arrives with COPY . . below). GOWORK=off keeps this in plain module
+# mode; go.work is not copied at this layer anyway.
+COPY lib/awsauth/go.mod lib/awsauth/go.sum lib/awsauth/
 RUN --mount=type=cache,target=/go/pkg/mod \
-    go mod download
+    GOWORK=off go mod download
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nats-jwt-callout ./cmd/nats-jwt-callout
+    GOWORK=off CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nats-jwt-callout ./cmd/nats-jwt-callout
 
 FROM gcr.io/distroless/static:nonroot
 COPY --from=build /out/nats-jwt-callout /usr/bin/nats-jwt-callout

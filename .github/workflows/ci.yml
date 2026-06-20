@@ -54,24 +54,37 @@ jobs:
           ${{ steps.go-cache.outputs.gocache }}
           ${{ steps.go-cache.outputs.gomodcache }}
           ~/.cache/golangci-lint
-        key: ${{ runner.os }}-go-${{ hashFiles('go.mod', 'go.sum') }}
+        key: ${{ runner.os }}-go-${{ hashFiles('go.mod', 'go.sum', 'lib/awsauth/go.mod', 'lib/awsauth/go.sum', 'go.work', 'go.work.sum') }}
         restore-keys: |
           ${{ runner.os }}-go-
 
+    # GOWORK=off on the root checks proves go.mod's require+replace are
+    # self-sufficient and not silently propped up by the committed go.work. The
+    # nested lib/awsauth module is a separate module: `./...` stops at its go.mod,
+    # so it needs its own dedicated steps (also GOWORK=off for determinism).
     - name: Verify modules are tidy
-      run: nix develop .#ci-test --command bash -c 'go mod tidy && git diff --exit-code -- go.mod go.sum'
+      run: |
+        nix develop .#ci-test --command bash -c '
+          GOWORK=off go mod tidy &&
+          (cd lib/awsauth && GOWORK=off go mod tidy) &&
+          git diff --exit-code -- go.mod go.sum lib/awsauth/go.mod lib/awsauth/go.sum'
 
     - name: Vet
-      run: nix develop .#ci-test --command go vet ./...
+      run: nix develop .#ci-test --command bash -c 'GOWORK=off go vet ./... && (cd lib/awsauth && GOWORK=off go vet ./...)'
 
     - name: golangci-lint
-      run: nix develop .#ci-test --command golangci-lint run ./...
+      run: nix develop .#ci-test --command bash -c 'GOWORK=off golangci-lint run ./... && (cd lib/awsauth && GOWORK=off golangci-lint run ./...)'
 
     - name: Test (race + hermetic e2e)
-      run: nix develop .#ci-test --command go test -race -count=1 ./...
+      run: nix develop .#ci-test --command bash -c 'GOWORK=off go test -race -count=1 ./... && (cd lib/awsauth && GOWORK=off go test -race -count=1 ./...)'
 
     - name: Build (all tags compile)
-      run: nix develop .#ci-test --command bash -c 'go build ./... && go vet -tags e2e_aws ./test/e2e/...'
+      run: nix develop .#ci-test --command bash -c 'GOWORK=off go build ./... && GOWORK=off go vet -tags e2e_aws ./test/e2e/...'
+
+    # Workspace mode (go.work active): proves the committed go.work / go.work.sum
+    # resolve and are not stale. Fails if go.work.sum is missing entries.
+    - name: Workspace resolves
+      run: nix develop .#ci-test --command go build ./...
 
   github-oidc-e2e:
     runs-on: ubuntu-latest
@@ -114,7 +127,7 @@ jobs:
           ${{ steps.go-cache.outputs.gocache }}
           ${{ steps.go-cache.outputs.gomodcache }}
           ~/.cache/golangci-lint
-        key: ${{ runner.os }}-go-${{ hashFiles('go.mod', 'go.sum') }}
+        key: ${{ runner.os }}-go-${{ hashFiles('go.mod', 'go.sum', 'lib/awsauth/go.mod', 'lib/awsauth/go.sum', 'go.work', 'go.work.sum') }}
         restore-keys: |
           ${{ runner.os }}-go-
 

@@ -23,10 +23,8 @@ import (
 	"testing"
 	"time"
 
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/sts"
-
 	"github.com/sylr/nats-jwt-callout/internal/authz"
+	"github.com/sylr/nats-jwt-callout/lib/awsauth"
 )
 
 func TestAWSRealToken(t *testing.T) {
@@ -41,27 +39,17 @@ func TestAWSRealToken(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Region must be set; the global STS endpoint does not serve this API.
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
+	// The lib loads the default AWS config and requires a region: the global
+	// STS endpoint does not serve GetWebIdentityToken. Defaults (RS256, 5m)
+	// preserve the previous inline behaviour's algorithm.
+	ts, err := awsauth.New(ctx, awsauth.Config{Audience: audience})
 	if err != nil {
-		t.Fatalf("load AWS config: %v", err)
+		t.Fatalf("awsauth.New: %v", err)
 	}
-	if awsCfg.Region == "" {
-		t.Fatal("AWS_REGION must be set; GetWebIdentityToken is not on the global endpoint")
-	}
-
-	stsClient := sts.NewFromConfig(awsCfg)
-	alg := "RS256"
-	dur := int32(300)
-	out, err := stsClient.GetWebIdentityToken(ctx, &sts.GetWebIdentityTokenInput{
-		Audience:         []string{audience},
-		SigningAlgorithm: &alg,
-		DurationSeconds:  &dur,
-	})
+	token, err := ts.Token(ctx)
 	if err != nil {
-		t.Fatalf("GetWebIdentityToken: %v (is outbound web identity federation enabled?)", err)
+		t.Fatalf("mint web identity token: %v (is outbound web identity federation enabled?)", err)
 	}
-	token := *out.WebIdentityToken
 
 	iss, sub, account := inspectToken(t, token)
 	t.Logf("issued token: iss=%s sub=%s aws_account=%s", iss, sub, account)
