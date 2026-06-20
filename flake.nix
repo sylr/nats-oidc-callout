@@ -65,7 +65,10 @@
 
           stablePackages = with pkgs; [
             gh
-            go_1_26
+            go_1_26     # bootstrap; go.mod's `go 1.26.4` directive selects the exact toolchain
+            goreleaser  # release-config check (ci goreleaser-check)
+            kind        # k8s e2e: spins up the ephemeral cluster (test/k8s/run.sh)
+            kubectl     # k8s e2e: applies manifests, waits on the client jobs
             trufflehog
           ];
           unstablePackages = with pkgs-unstable; [
@@ -73,16 +76,24 @@
             golangci-lint
           ];
           otherPackages = nixpkgs.lib.mapAttrsToList mkGithubBinary githubBinaries;
+          allPackages = stablePackages ++ unstablePackages ++ otherPackages;
         in
         {
           default = pkgs.mkShell {
-            packages = stablePackages ++ unstablePackages ++ otherPackages;
+            packages = allPackages;
             shellHook = ''
               uv sync
               export VIRTUAL_ENV=$(realpath .venv)
               layout python3
               pre-commit install-hooks
             '';
+          };
+
+          # Non-interactive shell with the identical toolchain, used by CI via
+          # `nix develop .#ci --command ...`. Omits the default shell's direnv-only
+          # hook (uv sync / layout / pre-commit) so CI gets just the pinned tools.
+          ci = pkgs.mkShell {
+            packages = allPackages;
           };
         }
       );

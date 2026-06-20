@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+# All jobs run inside the repo's Nix dev shell (`nix develop .#ci`) so the
+# toolchain — golangci-lint, goreleaser, kind, kubectl, … — is the exact same
+# version locally and in CI. The Go compiler is selected by go.mod's `go`
+# directive (GOTOOLCHAIN), which the pinned go in the shell bootstraps.
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -17,35 +21,22 @@ jobs:
     # in the dedicated github-oidc-e2e job below instead.
     steps:
     - uses: actions/checkout@v7
-
-    - uses: actions/setup-go@v6
-      with:
-        go-version: stable
-        check-latest: true
+    - uses: DeterminateSystems/nix-installer-action@v22
 
     - name: Verify modules are tidy
-      run: |
-        go mod tidy
-        git diff --exit-code -- go.mod go.sum
+      run: nix develop .#ci --command bash -c 'go mod tidy && git diff --exit-code -- go.mod go.sum'
 
     - name: Vet
-      run: go vet ./...
+      run: nix develop .#ci --command go vet ./...
 
     - name: golangci-lint
-      # Install from source with the job's Go toolchain. The prebuilt release
-      # binaries are built with an older Go and refuse to lint a module whose
-      # go.mod targets a newer Go ("build Go < targeted Go").
-      run: |
-        go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
-        golangci-lint run ./...
+      run: nix develop .#ci --command golangci-lint run ./...
 
     - name: Test (race + hermetic e2e)
-      run: go test -race -count=1 ./...
+      run: nix develop .#ci --command go test -race -count=1 ./...
 
     - name: Build (all tags compile)
-      run: |
-        go build ./...
-        go vet -tags e2e_aws ./test/e2e/...
+      run: nix develop .#ci --command bash -c 'go build ./... && go vet -tags e2e_aws ./test/e2e/...'
 
   github-oidc-e2e:
     runs-on: ubuntu-latest
@@ -57,23 +48,16 @@ jobs:
       id-token: write
     steps:
     - uses: actions/checkout@v7
-
-    - uses: actions/setup-go@v6
-      with:
-        go-version: stable
-        check-latest: true
+    - uses: DeterminateSystems/nix-installer-action@v22
 
     - name: GitHub OIDC end-to-end (embedded nats-server + callout + real token)
-      run: go test -race -count=1 -v -run TestGitHubActionsToken ./test/e2e/...
+      run: nix develop .#ci --command go test -race -count=1 -v -run TestGitHubActionsToken ./test/e2e/...
 
   goreleaser-check:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v7
-    - uses: actions/setup-go@v6
-      with:
-        go-version: stable
-    - uses: goreleaser/goreleaser-action@v7
-      with:
-        version: latest
-        args: check
+    - uses: DeterminateSystems/nix-installer-action@v22
+
+    - name: goreleaser check
+      run: nix develop .#ci --command goreleaser check
