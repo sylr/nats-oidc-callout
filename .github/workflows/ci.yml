@@ -9,10 +9,11 @@ on:
 permissions:
   contents: read
 
-# All jobs run inside the repo's Nix dev shell (`nix develop .#ci`) so the
-# toolchain — golangci-lint, goreleaser, kind, kubectl, … — is the exact same
-# version locally and in CI. The Go compiler is selected by go.mod's `go`
-# directive (GOTOOLCHAIN), which the pinned go in the shell bootstraps.
+# Each job runs inside a per-job Nix dev shell (`nix develop .#ci-<job>`) that
+# carries only the tools that job needs, so the toolchain — golangci-lint,
+# goreleaser, kind, kubectl, … — is the exact same version locally and in CI
+# while keeping each job's Cachix pull minimal. The Go compiler is selected by
+# go.mod's `go` directive (GOTOOLCHAIN), which the pinned go bootstraps.
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -32,19 +33,19 @@ jobs:
         name: nats-jwt-callout
 
     - name: Verify modules are tidy
-      run: nix develop .#ci --command bash -c 'go mod tidy && git diff --exit-code -- go.mod go.sum'
+      run: nix develop .#ci-test --command bash -c 'go mod tidy && git diff --exit-code -- go.mod go.sum'
 
     - name: Vet
-      run: nix develop .#ci --command go vet ./...
+      run: nix develop .#ci-test --command go vet ./...
 
     - name: golangci-lint
-      run: nix develop .#ci --command golangci-lint run ./...
+      run: nix develop .#ci-test --command golangci-lint run ./...
 
     - name: Test (race + hermetic e2e)
-      run: nix develop .#ci --command go test -race -count=1 ./...
+      run: nix develop .#ci-test --command go test -race -count=1 ./...
 
     - name: Build (all tags compile)
-      run: nix develop .#ci --command bash -c 'go build ./... && go vet -tags e2e_aws ./test/e2e/...'
+      run: nix develop .#ci-test --command bash -c 'go build ./... && go vet -tags e2e_aws ./test/e2e/...'
 
   github-oidc-e2e:
     runs-on: ubuntu-latest
@@ -67,7 +68,7 @@ jobs:
         name: nats-jwt-callout
 
     - name: GitHub OIDC end-to-end (embedded nats-server + callout + real token)
-      run: nix develop .#ci --command go test -race -count=1 -v -run TestGitHubActionsToken ./test/e2e/...
+      run: nix develop .#ci-github-oidc-e2e --command go test -race -count=1 -v -run TestGitHubActionsToken ./test/e2e/...
 
   goreleaser-check:
     runs-on: ubuntu-latest
@@ -84,7 +85,7 @@ jobs:
         name: nats-jwt-callout
 
     - name: goreleaser check
-      run: nix develop .#ci --command goreleaser check
+      run: nix develop .#ci-goreleaser-check --command goreleaser check
 
   k8s-e2e:
     runs-on: ubuntu-latest
@@ -105,4 +106,4 @@ jobs:
         name: nats-jwt-callout
 
     - name: Kubernetes service-account-token e2e (kind)
-      run: nix develop .#ci --command bash test/k8s/run.sh
+      run: nix develop .#ci-k8s-e2e --command bash test/k8s/run.sh

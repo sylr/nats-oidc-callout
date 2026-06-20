@@ -89,11 +89,23 @@
             '';
           };
 
-          # Non-interactive shell with the identical toolchain, used by CI via
-          # `nix develop .#ci --command ...`. Omits the default shell's direnv-only
-          # hook (uv sync / layout / pre-commit) so CI gets just the pinned tools.
-          ci = pkgs.mkShell {
-            packages = allPackages;
+          # Per-CI-job shells. Each carries only the tools that job actually
+          # runs, so its Cachix pull stays minimal (e.g. ci-k8s-e2e never pulls
+          # Go/golangci-lint/goreleaser). Names match the job names in ci.yml.
+          # The Go compiler is selected by go.mod's directive (GOTOOLCHAIN); the
+          # pinned go here only bootstraps it.
+          ci-test = pkgs.mkShell {
+            packages = [ pkgs.go_1_26 pkgs-unstable.golangci-lint ];
+          };
+          ci-github-oidc-e2e = pkgs.mkShell {
+            packages = [ pkgs.go_1_26 ];
+          };
+          ci-goreleaser-check = pkgs.mkShell {
+            packages = [ pkgs.goreleaser ];
+          };
+          ci-k8s-e2e = pkgs.mkShell {
+            # Docker comes from the runner; kind/kubectl from Nix.
+            packages = [ pkgs.kind pkgs.kubectl ];
           };
         }
       );
