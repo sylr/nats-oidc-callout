@@ -238,3 +238,16 @@ jobs:
               | kubeconform -strict -summary -ignore-missing-schemas \
                   -kubernetes-version 1.31.0
           done'
+
+    # Release contract: package the chart the way release.yml does and assert
+    # the default image it renders is one goreleaser publishes (v{{ .Version }}).
+    # Plain `helm lint` cannot catch this -- a tag without the "v" is still a
+    # syntactically valid image reference. Covers a stable and a prerelease tag.
+    - name: chart release contract (image tag)
+      run: |
+        nix develop .#ci-helm --command bash -c '
+          set -euo pipefail
+          out="$(mktemp -d)"
+          for tag in v1.2.3 v1.2.3-rc.1; do
+            scripts/package-chart.sh "$tag" "$out" >/dev/null
+          done'

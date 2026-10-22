@@ -53,9 +53,12 @@ jobs:
 
   # Publish the Helm chart as an OCI artifact to ghcr.io alongside the image.
   # Runs after goreleaser so the chart's appVersion points at an image that has
-  # already been pushed. Both the chart version and appVersion are set from the
-  # release tag, so each release is a unique, immutable chart version whose
-  # default image tag matches the released binary.
+  # already been pushed. Each release is a unique, immutable chart version.
+  # The chart `version` is the tag without its "v" (Helm requires SemVer), but
+  # `appVersion` -- the default image tag -- keeps the "v" because goreleaser
+  # publishes the image as v{{ .Version }}. scripts/package-chart.sh packages
+  # that way and refuses to continue unless the packaged chart renders the
+  # exact image reference goreleaser published.
   helm-chart:
     runs-on: ubuntu-latest
     needs: goreleaser
@@ -84,7 +87,7 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           echo "$REGISTRY_TOKEN" | helm registry login ghcr.io -u "$REGISTRY_USER" --password-stdin
           repo="oci://ghcr.io/$OWNER/helm-charts"
-          # Each release tag is a unique, immutable chart version (== appVersion).
+          # Each release tag is a unique, immutable chart version (tag minus "v").
           # ghcr.io has no tag immutability, so helm push would SILENTLY overwrite
           # an existing version -- guard so a re-run of the same tag is a no-op
           # instead of clobbering published bytes.
@@ -94,11 +97,7 @@ jobs:
           fi
           # Package into a dedicated empty dir and push the exact file helm
           # reports -- never a dist/*.tgz glob, which could match a stray archive.
-          # tee the output to a temp file so it still shows in the CI log, then
-          # read the path back from that file.
+          # The script logs to stderr (visible in CI) and prints only the path.
           out="$(mktemp -d)"
-          log="$(mktemp)"
-          helm package contribs/chart --version "$version" --app-version "$version" -d "$out" | tee "$log"
-          pkg="$(sed -n "s/.*saved it to: //p" "$log")"
-          test -f "$pkg"
+          pkg="$(scripts/package-chart.sh "$GITHUB_REF_NAME" "$out")"
           helm push "$pkg" "$repo"'
