@@ -364,6 +364,15 @@ Disabled by default — no listener is opened and nothing is collected unless
 - A rule must carry a **strong identity pin** (exact `sub`, literal AWS account,
   or `repository`/`repository_id`/`job_workflow_ref`); otherwise it requires an
   explicit `allow_broad: true`. Subject matches are fully anchored.
+  - A literal AWS account pins in two forms. The first is a glob `sub` whose
+    account field (the 5th `:`-separated field) is 12 literal digits with no `*`
+    before it, e.g. `arn:aws:iam::123456789012:role/*`. A `*` also matches `:`,
+    so `arn:aws:sts:*:123456789012:*` is broad. The second is the
+    `aws.aws_account` claim.
+  - A **regex `sub` (`re:`) is never a pin** on its own, whatever account it
+    appears to contain: alternation or grouping can widen it
+    (`re:^arn:aws:iam::123456789012:role/.*|.*$` matches every subject). Pair it
+    with `claims: { aws.aws_account: "123456789012" }`, or set `allow_broad: true`.
 - The service **fails closed**: any verification/policy error denies the connect.
 
 ## Tests
