@@ -19,8 +19,8 @@ func celAppPolicy() *authz.Policy {
 		},
 		Grant: authz.Grant{
 			Account:   "APP",
-			Publish:   authz.Permission{Allow: []string{"app.>"}},
-			Subscribe: authz.Permission{Allow: []string{"app.>", "_INBOX.>"}},
+			Publish:   &authz.Permission{Allow: []string{"app.>"}},
+			Subscribe: &authz.Permission{Allow: []string{"app.>", "_INBOX.>"}},
 		},
 	}}}
 }

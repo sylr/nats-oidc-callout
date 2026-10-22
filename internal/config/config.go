@@ -7,8 +7,6 @@ import (
 	"os"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/sylr/nats-oidc-callout/internal/authz"
 )
 
@@ -102,15 +100,18 @@ const DefaultHTTPTimeout = 10 * time.Second
 // explicit address.
 const DefaultMetricsAddress = ":9090"
 
-// Load reads and validates the configuration from a YAML file. If PolicyFile is
-// set, the policy is loaded from there and replaces any inline policy.
+// Load reads and validates the configuration from a YAML file. Unknown fields at
+// any level are rejected. If PolicyFile is set, the policy is loaded from there
+// and replaces any inline policy.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config %q: %w", path, err)
 	}
 	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	// Strict: an unknown key anywhere (e.g. a misspelt require_claims or a
+	// policy field) fails the load rather than silently dropping a restriction.
+	if err := authz.DecodeStrict(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config %q: %w", path, err)
 	}
 

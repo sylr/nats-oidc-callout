@@ -5,6 +5,9 @@
 # example — never reuse them in production. Generate your own account + curve
 # keypairs (e.g. `nk -gen account` and `nk -gen curve`) and keep the seeds in a
 # secret store. The seeds here pair with the public keys in examples/server.conf.
+#
+# Keys are checked strictly: an unknown or misspelt key anywhere in this file
+# (or in the policy) fails startup and is rejected on SIGHUP reload.
 
 # Connection the callout service uses to reach NATS. It authenticates as one of
 # the auth_callout.auth_users so it bypasses the callout itself.

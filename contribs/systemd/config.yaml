@@ -4,6 +4,10 @@
 # This is a TEMPLATE — the service will not start until you replace the
 # REPLACE_ME values. Generate keys with the `nk` tool (see the project README)
 # and keep the seeds readable only by the nats-oidc-callout user.
+#
+# Keys are checked strictly: an unknown or misspelt key anywhere in this file
+# or in policy.yaml fails startup and is rejected on reload. In policy.yaml, an
+# omitted publish/subscribe grant denies all; use allow: [">"] for unrestricted.
 
 nats:
   url: "tls://127.0.0.1:4222"

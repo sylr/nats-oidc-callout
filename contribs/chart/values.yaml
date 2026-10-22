@@ -24,8 +24,10 @@ logLevel: info
 #
 # `config.values` is passed through VERBATIM as the rendered config.yaml — use
 # the exact schema from examples/config.yaml in the repo (snake_case keys,
-# nested issuers, etc.). The policy may be inline here (`policy:`) or kept in a
-# separate ConfigMap via `policy.values` below (then set `policy_file` here to
+# nested issuers, etc.); unknown keys fail startup. In policy grants, an omitted
+# publish/subscribe denies all (use allow: [">"] for unrestricted). The policy
+# may be inline here (`policy:`) or kept in a separate ConfigMap via
+# `policy.values` below (then set `policy_file` here to
 # /etc/nats-oidc-callout/policy/policy.yaml).
 #
 # The config Secret is mounted as a directory at /etc/nats-oidc-callout/config

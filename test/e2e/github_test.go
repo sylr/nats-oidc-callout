@@ -119,8 +119,8 @@ func githubPolicy(issuer, repo string) *authz.Policy {
 		},
 		Grant: authz.Grant{
 			Account:   "APP",
-			Publish:   authz.Permission{Allow: []string{"app.>"}},
-			Subscribe: authz.Permission{Allow: []string{"app.>", "_INBOX.>"}},
+			Publish:   &authz.Permission{Allow: []string{"app.>"}},
+			Subscribe: &authz.Permission{Allow: []string{"app.>", "_INBOX.>"}},
 		},
 	}}}
 }
@@ -136,8 +136,8 @@ func celGithubPolicy(issuer, expr string) *authz.Policy {
 		},
 		Grant: authz.Grant{
 			Account:   "APP",
-			Publish:   authz.Permission{Allow: []string{"app.>"}},
-			Subscribe: authz.Permission{Allow: []string{"app.>", "_INBOX.>"}},
+			Publish:   &authz.Permission{Allow: []string{"app.>"}},
+			Subscribe: &authz.Permission{Allow: []string{"app.>", "_INBOX.>"}},
 		},
 	}}}
 }

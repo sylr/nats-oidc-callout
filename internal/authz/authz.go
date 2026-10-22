@@ -6,7 +6,10 @@
 package authz
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"strings"
@@ -70,10 +73,14 @@ type Match struct {
 type Grant struct {
 	// Account is the NATS account NAME the user is bound to (e.g. "APP").
 	Account string `yaml:"account"`
-	// Publish/Subscribe permissions.
-	Publish   Permission `yaml:"publish"`
-	Subscribe Permission `yaml:"subscribe"`
-	// Response, when set, allows the user to reply to requests it receives.
+	// Publish/Subscribe permissions. An omitted (nil) direction denies every
+	// subject in that direction. A present one must list at least one allow or
+	// deny subject; use allow: [">"] for unrestricted access. NATS treats an
+	// empty permission as unrestricted, so absence must never reach it as empty.
+	Publish   *Permission `yaml:"publish"`
+	Subscribe *Permission `yaml:"subscribe"`
+	// Response, when set, allows the user to reply to requests it receives,
+	// even when Publish is omitted (denied).
 	Response *Response `yaml:"response"`
 	// MaxExpiry caps the issued user JWT lifetime. The callout further caps it
 	// to the verified token's own expiry. Zero means "no policy cap".
@@ -111,14 +118,15 @@ var githubStrongPinKeys = map[string]struct{}{
 // awsAccountID matches a literal 12-digit AWS account id.
 var awsAccountID = regexp.MustCompile(`^[0-9]{12}$`)
 
-// LoadPolicy reads a policy from a YAML file and validates it.
+// LoadPolicy reads a policy from a YAML file and validates it. Unknown fields
+// are rejected so a typo cannot silently drop a restriction.
 func LoadPolicy(path string) (*Policy, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read policy %q: %w", path, err)
 	}
 	var p Policy
-	if err := yaml.Unmarshal(data, &p); err != nil {
+	if err := DecodeStrict(data, &p); err != nil {
 		return nil, fmt.Errorf("parse policy %q: %w", path, err)
 	}
 	if err := p.Validate(); err != nil {
@@ -138,6 +146,12 @@ func (p *Policy) Validate() error {
 		r := &p.Rules[i]
 		if r.Grant.Account == "" {
 			return fmt.Errorf("rule %q: grant.account is required", r.identity(i))
+		}
+		if err := r.Grant.Publish.validate("publish"); err != nil {
+			return fmt.Errorf("rule %q: %w", r.identity(i), err)
+		}
+		if err := r.Grant.Subscribe.validate("subscribe"); err != nil {
+			return fmt.Errorf("rule %q: %w", r.identity(i), err)
 		}
 		re, err := compileSub(r.Match.Sub)
 		if err != nil {
@@ -253,10 +267,30 @@ func (r *Rule) identity(i int) string {
 	return fmt.Sprintf("#%d", i)
 }
 
+// validate rejects a present but empty permission: NATS would treat it as
+// unrestricted, which is never what an empty block means.
+func (p *Permission) validate(direction string) error {
+	if p != nil && len(p.Allow) == 0 && len(p.Deny) == 0 {
+		return fmt.Errorf("grant.%s has neither allow nor deny; omit %s to deny all, "+
+			`or set allow: [">"] for unrestricted access`, direction, direction)
+	}
+	return nil
+}
+
+// jwtPermission converts p for the user JWT. An omitted (nil) direction denies
+// everything. A permission is therefore always emitted, so the target
+// account's default_permissions never apply to callout users.
+func (p *Permission) jwtPermission() jwt.Permission {
+	if p == nil {
+		return jwt.Permission{Deny: []string{">"}}
+	}
+	return jwt.Permission{Allow: p.Allow, Deny: p.Deny}
+}
+
 func (g *Grant) permissionLimits() jwt.UserPermissionLimits {
 	var lim jwt.UserPermissionLimits
-	lim.Pub = jwt.Permission{Allow: g.Publish.Allow, Deny: g.Publish.Deny}
-	lim.Sub = jwt.Permission{Allow: g.Subscribe.Allow, Deny: g.Subscribe.Deny}
+	lim.Pub = g.Publish.jwtPermission()
+	lim.Sub = g.Subscribe.jwtPermission()
 	if g.Response != nil {
 		lim.Resp = &jwt.ResponsePermission{MaxMsgs: g.Response.Max, Expires: g.Response.TTL}
 	}
@@ -324,4 +358,26 @@ func compileSub(pattern string) (*regexp.Regexp, error) {
 		return nil, fmt.Errorf("invalid sub glob: %w", err)
 	}
 	return re, nil
+}
+
+// DecodeStrict decodes a single YAML document into v, rejecting unknown fields
+// at every nesting level and any trailing document, so a typo fails loudly
+// instead of silently dropping a restriction. Empty input leaves v at its zero
+// value; required fields are enforced by validation.
+func DecodeStrict(data []byte, v any) error {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(v); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
+	if err := dec.Decode(new(yaml.Node)); !errors.Is(err, io.EOF) {
+		if err != nil {
+			return err
+		}
+		return errors.New("unexpected additional YAML document")
+	}
+	return nil
 }
