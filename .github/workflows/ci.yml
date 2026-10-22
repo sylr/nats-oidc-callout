@@ -231,6 +231,7 @@ jobs:
             "--set metrics.enabled=false"
             "--set metrics.serviceMonitor.enabled=true --set podDisruptionBudget.enabled=true --set replicaCount=2"
             "--set config.existingSecret=ext --set policy.values.rules[0].name=k8s-app"
+            "--set policy.existingConfigMap=ext-policy --set policy.existingConfigMapKey=rules.yaml"
           )
           for v in "${permutations[@]}"; do
             echo "== helm template $v =="

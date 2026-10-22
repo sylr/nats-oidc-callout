@@ -26,7 +26,11 @@ logLevel: info
 # the exact schema from examples/config.yaml in the repo (snake_case keys,
 # nested issuers, etc.). The policy may be inline here (`policy:`) or kept in a
 # separate ConfigMap via `policy.values` below (then set `policy_file` here to
-# /etc/nats-oidc-callout/policy.yaml).
+# /etc/nats-oidc-callout/policy/policy.yaml).
+#
+# The config Secret is mounted as a directory at /etc/nats-oidc-callout/config
+# (file: config.yaml), never via subPath, so updates to the Secret propagate to
+# running pods and a SIGHUP can pick them up. See the README "Config reload".
 config:
   # Bring your own Secret instead of rendering one from `config.values`.
   # The Secret must contain a key holding the full config YAML.
@@ -56,16 +60,19 @@ config:
       path: "/metrics"
     # Inline policy (first match wins). Alternatively keep it in a ConfigMap
     # (see policy.values) and replace this with:
-    #   policy_file: "/etc/nats-oidc-callout/policy.yaml"
+    #   policy_file: "/etc/nats-oidc-callout/policy/policy.yaml"
     policy:
       rules: []
 
 # -- Authorization policy (optional separate ConfigMap) ---------------------
 #
 # When `policy.values` is non-empty it is rendered into a ConfigMap and mounted
-# at /etc/nats-oidc-callout/policy.yaml. You must then point the config at it by
-# setting `config.values.policy_file: /etc/nats-oidc-callout/policy.yaml` and
-# removing the inline `config.values.policy` block above.
+# (as a directory, no subPath) at /etc/nats-oidc-callout/policy, where every
+# ConfigMap key is a file named after the key. You must then point the config at
+# it by setting
+# `config.values.policy_file: /etc/nats-oidc-callout/policy/policy.yaml` (or
+# `/etc/nats-oidc-callout/policy/<existingConfigMapKey>`) and removing the inline
+# `config.values.policy` block above.
 policy:
   existingConfigMap: ""
   existingConfigMapKey: policy.yaml
@@ -97,9 +104,11 @@ serviceAccount:
   annotations: {}
   name: ""
 
-# Restart the pods automatically when the rendered config/policy changes. The
-# service also supports SIGHUP hot-reload (no restart); for that, prefer a tool
-# like stakater/reloader with a signal strategy instead.
+# Restart the pods automatically when the chart-RENDERED config/policy changes
+# (not for existingSecret / existingConfigMap, whose content the chart cannot
+# see). The service also supports SIGHUP hot-reload (no restart); for that,
+# prefer a tool like stakater/reloader with a signal strategy instead, and read
+# the README "Config reload" section for the propagation delay.
 restartOnConfigChange: true
 
 podAnnotations: {}

@@ -57,7 +57,7 @@ at the mounted file:
 ```yaml
 config:
   values:
-    policy_file: /etc/nats-oidc-callout/policy.yaml   # replaces config.values.policy
+    policy_file: /etc/nats-oidc-callout/policy/policy.yaml   # replaces config.values.policy
 policy:
   values:
     rules:
@@ -87,8 +87,43 @@ See [`values.yaml`](./values.yaml) for the complete list.
 
 ## Config reload
 
-With `restartOnConfigChange: true` a checksum annotation rolls the pods on every
-`helm upgrade` that changes the config or policy. The binary also hot-reloads on
-`SIGHUP`, but the distroless image has no shell, so `kubectl exec ... kill` is
-not possible — use a controller that signals PID 1 (e.g. `stakater/reloader`
-with a signal strategy) if you want zero-restart reloads.
+Two ways to apply a config or policy change:
+
+**Rollout (default).** With `restartOnConfigChange: true` a checksum annotation
+rolls the pods on every `helm upgrade` that changes the *chart-rendered* config
+Secret or policy ConfigMap. The chart cannot see the content of resources it does
+not render, so with `config.existingSecret` or `policy.existingConfigMap` no
+checksum is added and a change to them does **not** restart anything — roll the
+pods yourself (`kubectl rollout restart`) or use the hot reload below.
+
+**Hot reload (`SIGHUP`, no restart).** The binary re-reads the config and policy
+files on `SIGHUP`, but the distroless image has no shell, so
+`kubectl exec ... kill` is not possible — use a controller that signals PID 1
+(e.g. `stakater/reloader` with a signal strategy). Things to know:
+
+- The config Secret is mounted at `/etc/nats-oidc-callout/config/config.yaml` and
+  the policy ConfigMap under `/etc/nats-oidc-callout/policy/` (one file per key:
+  `policy.yaml`, or your `policy.existingConfigMapKey`), both as whole
+  directories (no `subPath`) so Kubernetes refreshes them in running pods.
+  `subPath` mounts are never updated, which would make a `SIGHUP` re-read stale
+  content while logging a successful reload. Do not mount over these paths with
+  `subPath` in `extraVolumeMounts`.
+- Propagation is not instant: the kubelet syncs mounted Secrets/ConfigMaps
+  periodically (sync period, 1m by default) plus the kubelet's cache TTL, so a
+  change can take on the order of a minute or more to appear in the pod. Send the
+  `SIGHUP` only **after** the new file content is visible; a signal sent earlier
+  re-reads the old content. If you use a reload controller, make sure it waits for
+  propagation (or signals again later).
+- A reload affects *new* authorizations only. Already-issued user JWTs / existing
+  NATS connections are not revoked.
+- Signing keys (`issuer_account_seed`, `xkey_seed`) and NATS connection settings
+  cannot be hot-reloaded and still require a restart.
+
+Upgrading from a chart version that mounted `/etc/nats-oidc-callout/policy.yaml`:
+change `policy_file` to `/etc/nats-oidc-callout/policy/<key>` (`policy.yaml`
+unless you set `policy.existingConfigMapKey`). With `config.existingSecret`, edit
+`policy_file` inside **your** Secret before upgrading; the chart cannot rewrite
+it, and pods would otherwise fail to load the policy. The `-config` path is
+handled by the chart itself. `extraVolumeMounts` that reused the chart's `policy`
+or `config` volume via `subPath` keep working, but their files will not refresh
+either.
