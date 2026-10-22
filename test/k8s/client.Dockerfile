@@ -2,7 +2,7 @@
 # Build image for the k8s e2e Go client (kind). Compiles ./test/k8s/client from
 # source, mirroring the callout image's build (see Dockerfile). The client reads
 # its projected service-account token via lib/k8sauth and connects to NATS.
-FROM golang:1.26 AS build
+FROM golang:1.27.3 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 # The root module replaces the in-tree nested modules, so their go.mod files
