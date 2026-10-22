@@ -305,8 +305,9 @@ serving**. In-flight authorizations finish against the config they started with.
 - **Hot-reloaded:** the authorization policy (incl. `policy_file`), trusted
   issuers / `require_claims`, audiences, signing-alg allowlist.
 - **Requires a restart:** the NATS connection settings, the issuer/xkey seeds,
-  and the metrics endpoint — a change to these is logged as a warning and ignored
-  until restart.
+  and the metrics endpoint — a change to these is ignored until restart, and
+  every reload logs a warning while they differ from the values the process
+  started with.
 
 ## Dynamic conditions (CEL)
 
