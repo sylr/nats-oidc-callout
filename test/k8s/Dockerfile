@@ -7,7 +7,7 @@
 # via buildkit-cache-dance (see .github/workflows/ci.yml); locally they reuse
 # the builder's cache. This caches the compile, which Docker layer caching
 # cannot once `COPY . .` changes.
-FROM golang:1.27.3 AS build
+FROM golang:1.26.10 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 # The root module replaces the in-tree nested modules, so their go.mod files
