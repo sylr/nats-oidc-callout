@@ -49,7 +49,8 @@ type Match struct {
 	// Sub matches the token "sub". It is a glob (only "*" is special) matched
 	// against the whole string, or a regular expression when prefixed with "re:"
 	// (which must be anchored with ^ and $). Matching always requires the
-	// pattern to span the entire subject.
+	// pattern to span the entire subject. A regex sub is never treated as a
+	// strong identity pin; pair it with one (e.g. aws.aws_account) or AllowBroad.
 	Sub string `yaml:"sub"`
 	// Claims requires each key to equal the given value in the verified token's
 	// flattened claim set (e.g. {"repository": "owner/repo"},
@@ -165,8 +166,9 @@ func (p *Policy) Validate() error {
 
 		if !r.hasStrongPin() && !r.Match.AllowBroad {
 			return fmt.Errorf("rule %q is broad: it has no strong identity pin "+
-				"(an exact sub, a literal AWS account, or repository/repository_id/"+
-				"job_workflow_ref); set allow_broad: true to confirm this is intentional",
+				"(an exact sub, a literal AWS account in a glob sub or aws.aws_account, "+
+				"or repository/repository_id/job_workflow_ref; a regex sub never pins); "+
+				"set allow_broad: true to confirm this is intentional",
 				r.identity(i))
 		}
 	}
@@ -224,7 +226,8 @@ func (r *Rule) subMatches(sub string) bool {
 
 // hasStrongPin reports whether the rule pins a specific identity tightly enough
 // to not be considered broad: an exact (wildcard-free) sub, a literal AWS
-// account (in the ARN or the aws.aws_account claim), or a strong GitHub claim.
+// account (in a glob ARN's account field or the aws.aws_account claim), or a
+// strong GitHub claim. A regex sub is never a pin on its own.
 func (r *Rule) hasStrongPin() bool {
 	if subIsExact(r.Match.Sub) {
 		return true
@@ -269,20 +272,22 @@ func subIsExact(pattern string) bool {
 	return !strings.Contains(pattern, "*")
 }
 
-// accountPinnedInARN reports whether the ARN pattern fixes the account-id field
-// (the 5th colon-separated ARN field) to a literal 12-digit AWS account id. It
-// normalizes away the "re:" prefix and ^/$ anchors so it works for both glob and
-// regex patterns; a wildcard or regex metacharacter in the account field is not
-// considered pinned.
+// accountPinnedInARN reports whether a glob sub pattern fixes the account-id
+// field (the 5th colon-separated ARN field) to a literal 12-digit AWS account
+// id. The fields before it must be literal too: "*" also matches ":", so a
+// wildcard there could shift where the digits land in the subject (e.g.
+// "arn:aws:sts:*:123456789012:*" matches "arn:aws:sts:x:999999999999:y:123456789012:z").
+//
+// Regex ("re:") patterns never count: textual splitting cannot account for
+// alternation, groups or escapes (e.g. "^arn:aws:iam::123456789012:role/.*|.*$"
+// matches every subject). Such rules need another pin, such as an
+// aws.aws_account claim, or allow_broad.
 func accountPinnedInARN(pattern string) bool {
-	if pattern == "" {
+	if pattern == "" || strings.HasPrefix(pattern, "re:") {
 		return false
 	}
-	pattern = strings.TrimPrefix(pattern, "re:")
-	pattern = strings.TrimPrefix(pattern, "^")
-	pattern = strings.TrimSuffix(pattern, "$")
 	fields := strings.SplitN(pattern, ":", 6)
-	if len(fields) < 5 {
+	if len(fields) < 5 || strings.Contains(strings.Join(fields[:4], ":"), "*") {
 		return false
 	}
 	return awsAccountID.MatchString(fields[4])

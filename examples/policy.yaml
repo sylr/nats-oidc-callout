@@ -11,7 +11,9 @@
 #     top-level (repository, repository_owner, ref, …).
 #
 # A rule must carry a "strong" identity pin (an exact sub, a literal AWS account,
-# or repository/repository_id/job_workflow_ref) or set allow_broad: true.
+# or repository/repository_id/job_workflow_ref) or set allow_broad: true. A
+# literal account pins via a glob sub (12 digits in the ARN account field, no
+# "*" before it) or the aws.aws_account claim; a "re:" sub never pins on its own.
 #
 # For conditions the declarative matchers can't express, a rule may add an
 # optional CEL expression (must evaluate to bool), AND-ed with the rest. Its
