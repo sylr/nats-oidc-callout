@@ -24,6 +24,12 @@ import (
 // or the token; detailed diagnostics go to the structured logger instead.
 var errDenied = errors.New("authorization denied")
 
+// DefaultVerifyTimeout is the per-request verification deadline used when New
+// is given zero. It stays below the NATS server's default authorization
+// timeout (2s, or the TLS timeout + 1s with TLS) so a slow verification is
+// answered with a denial rather than left to time out on the server.
+const DefaultVerifyTimeout = 1500 * time.Millisecond
+
 // ruleset is the hot-swappable part of the authorizer: the verifier and policy.
 // It is replaced atomically on reload.
 type ruleset struct {
@@ -38,21 +44,26 @@ type Authorizer struct {
 	logger  *slog.Logger
 	metrics *metrics.Metrics // nil-safe; nil disables instrumentation
 	// verifyTimeout bounds the per-request token verification (JWKS fetch on a
-	// cold cache, etc.).
+	// cold cache or key rotation, etc.).
 	verifyTimeout time.Duration
 }
 
 // New builds an Authorizer. signKey must be the account key whose public key
 // equals the server's auth_callout.issuer. m may be nil to disable metrics.
-func New(v *verifier.Verifier, policy *authz.Policy, signKey nkeys.KeyPair, logger *slog.Logger, m *metrics.Metrics) *Authorizer {
+// verifyTimeout bounds each token verification; zero means
+// DefaultVerifyTimeout.
+func New(v *verifier.Verifier, policy *authz.Policy, signKey nkeys.KeyPair, logger *slog.Logger, m *metrics.Metrics, verifyTimeout time.Duration) *Authorizer {
 	if logger == nil {
 		logger = slog.Default()
+	}
+	if verifyTimeout <= 0 {
+		verifyTimeout = DefaultVerifyTimeout
 	}
 	a := &Authorizer{
 		signKey:       signKey,
 		logger:        logger,
 		metrics:       m,
-		verifyTimeout: 10 * time.Second,
+		verifyTimeout: verifyTimeout,
 	}
 	a.state.Store(&ruleset{verifier: v, policy: policy})
 	return a

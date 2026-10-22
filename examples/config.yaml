@@ -67,6 +67,20 @@ issuers:
 # Bound on OIDC discovery / JWKS HTTP calls.
 http_timeout: "10s"
 
+# Concurrent authorization workers. Requests beyond that wait in a fixed queue
+# of 5000 and are dropped (then timed out by the server) when it is full.
+workers: 8
+
+# Deadline for verifying one token, including any JWKS refresh it waits for.
+# Keep it below the NATS server's authorization timeout (2s by default, or the
+# TLS timeout + 1s with TLS).
+verify_timeout: "1500ms"
+
+# Minimum interval between JWKS refreshes triggered by a token whose signing
+# key is not cached. Bounds the traffic bogus key IDs can cause; a legitimate
+# key rotation is picked up within this interval.
+jwks_refresh_interval: "30s"
+
 # Optional Prometheus metrics endpoint. When enabled, exposes counters/histograms
 # (authorization_requests_total, authorization_denials_total,
 # authorization_duration_seconds, nats_connected) plus Go runtime/process

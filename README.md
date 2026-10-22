@@ -347,11 +347,48 @@ failure, bad policy), the error is logged and the **previous config keeps
 serving**. In-flight authorizations finish against the config they started with.
 
 - **Hot-reloaded:** the authorization policy (incl. `policy_file`), trusted
-  issuers / `require_claims`, audiences, signing-alg allowlist.
+  issuers / `require_claims`, audiences, signing-alg allowlist,
+  `jwks_refresh_interval`.
 - **Requires a restart:** the NATS connection settings, the issuer/xkey seeds,
-  and the metrics endpoint — a change to these is ignored until restart, and
-  every reload logs a warning while they differ from the values the process
-  started with.
+  the metrics endpoint, `workers` and `verify_timeout` — a change to these is
+  ignored until restart, and every reload logs a warning while they differ from
+  the values the process started with.
+
+## Concurrency, timeouts and key refresh
+
+```yaml
+workers: 8                    # concurrent authorizations (default 8)
+verify_timeout: "1500ms"      # per-token verification deadline (default 1.5s)
+jwks_refresh_interval: "30s"  # min interval between JWKS refreshes (default 30s)
+```
+
+- **Workers.** Authorization requests are handled by `workers` concurrent
+  workers, so one slow request does not hold up the others. Requests beyond
+  that wait in a queue of 5000 (fixed by the
+  [callout library](https://github.com/synadia-io/callout.go)); when the queue is
+  full, new requests are dropped and logged, and the NATS server times them out
+  and rejects the client. On shutdown the NATS connection is drained (for at
+  most 10s) and then closed, which stops new requests; the workers are not
+  stopped explicitly and end with the process. Requests still queued at that
+  point can no longer be answered, so the server times them out and the clients
+  retry.
+- **Verification deadline.** `verify_timeout` bounds the verification of one
+  token, including waiting for a JWKS refresh. Keep it **below the NATS server's
+  authorization timeout** — `authorization { timeout }`, 2s by default, or the
+  TLS handshake timeout + 1s when the client port uses TLS — so a slow
+  verification ends in an explicit denial rather than a server-side timeout.
+  Time spent in the queue is not counted.
+- **Key refresh.** Each issuer's JWKS is cached. A token whose key is not cached
+  (unknown `kid`, or a signature no cached key verifies) may trigger a refresh,
+  but refreshes run one at a time and **at most once per
+  `jwks_refresh_interval`** (counted from the previous attempt, successful or
+  not). The request that triggers a refresh waits for it; other misses are
+  rejected immediately instead of queueing behind it. Tokens signed with a cached
+  key never wait on the network. Since anyone can craft a token with a trusted
+  `iss` and a random `kid`, this bounds the outbound JWKS traffic and keeps an
+  unreachable JWKS endpoint from delaying valid clients. A legitimate key
+  rotation is picked up within `jwks_refresh_interval`; tokens signed with the
+  new key are rejected until then, so clients should retry.
 
 ## Dynamic conditions (CEL)
 

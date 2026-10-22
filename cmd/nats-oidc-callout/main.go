@@ -129,11 +129,13 @@ func run(ctx context.Context, logger *slog.Logger, configPath string) error {
 	if err != nil {
 		return fmt.Errorf("connect to NATS: %w", err)
 	}
-	defer nc.Close()
+	// Deferred so every exit path (shutdown or failure) drains then closes the
+	// connection without stopping the callout service; see stopService.
+	defer stopService(nc)
 	m.TrackNATSConnection(nc.IsConnected)
 	logger.Info("connected to NATS", "url", nc.ConnectedUrl())
 
-	authorizer := authzcallout.New(v, &cfg.Policy, signKey, logger, m)
+	authorizer := authzcallout.New(v, &cfg.Policy, signKey, logger, m, cfg.VerifyTimeout)
 
 	// The callout library reports every error through this callback. ErrService
 	// marks a failure of the underlying NATS micro service, which then stops
@@ -142,6 +144,9 @@ func run(ctx context.Context, logger *slog.Logger, configPath string) error {
 	opts := []callout.Option{
 		callout.Authorizer(authorizer.Authorize),
 		callout.ResponseSignerKey(signKey),
+		// Async workers: authorizations run concurrently, so one slow request (a
+		// JWKS refresh) does not hold up the others.
+		callout.AsyncWorkers(cfg.Workers),
 		callout.ErrCallback(func(err error) {
 			if errors.Is(err, callout.ErrService) {
 				select {
@@ -159,7 +164,7 @@ func run(ctx context.Context, logger *slog.Logger, configPath string) error {
 	if err != nil {
 		return fmt.Errorf("start callout service: %w", err)
 	}
-	defer func() { _ = svc.Stop() }()
+	// The service is never stopped explicitly; see stopService.
 	started.Store(true)
 
 	go watchReloads(ctx, configPath, cfg, authorizer, logger)
@@ -174,6 +179,32 @@ func run(ctx context.Context, logger *slog.Logger, configPath string) error {
 	case err := <-svcFailed:
 		return fmt.Errorf("callout service stopped: %w", err)
 	}
+}
+
+// shutdownDrainTimeout bounds how long shutdown waits for the NATS connection
+// to drain before closing it.
+const shutdownDrainTimeout = 10 * time.Second
+
+// stopService stops authorization traffic on shutdown: it drains the NATS
+// connection (bounded by shutdownDrainTimeout), then closes it, which ends
+// every subscription delivery.
+//
+// It deliberately never calls svc.Stop(). With async workers, callout.go's Stop
+// closes the worker channel while micro has only started draining the
+// subscriptions, and a delivery still in its callback then panics sending on
+// the closed channel. Ordering cannot rule that out: Drain is asynchronous and
+// can end abnormally (disconnect, drain timeout) before the callbacks return.
+// Leaving the channel open makes the panic impossible; the idle workers stay
+// blocked on it and end with the process. Requests still queued can no longer
+// be answered: the server times them out and the clients retry.
+func stopService(nc *nats.Conn) {
+	if err := nc.Drain(); err == nil {
+		deadline := time.Now().Add(shutdownDrainTimeout)
+		for !nc.IsClosed() && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	nc.Close()
 }
 
 // buildVerifier constructs the OIDC verifier from the configured issuers
@@ -200,19 +231,20 @@ func buildVerifier(ctx context.Context, cfg *config.Config) (*verifier.Verifier,
 	}
 
 	return verifier.New(ctx, verifier.Options{
-		Issuers:     issuers,
-		Audiences:   cfg.Audiences,
-		SigningAlgs: cfg.SigningAlgs,
-		HTTPTimeout: cfg.HTTPTimeout,
-		RootCAs:     rootCAs,
+		Issuers:             issuers,
+		Audiences:           cfg.Audiences,
+		SigningAlgs:         cfg.SigningAlgs,
+		HTTPTimeout:         cfg.HTTPTimeout,
+		RootCAs:             rootCAs,
+		JWKSRefreshInterval: cfg.JWKSRefreshInterval,
 	})
 }
 
 // watchReloads reloads the verifier and policy on SIGHUP. Reload is best-effort:
 // if the new config is invalid (parse error, OIDC discovery failure, bad policy),
 // the previous config keeps serving. Settings that can't be hot-swapped (NATS
-// connection, signing/xkey seeds, metrics endpoint) are reported as needing a
-// restart.
+// connection, signing/xkey seeds, metrics endpoint, workers, verify timeout)
+// are reported as needing a restart.
 //
 // startup is the config the process started with. It is never replaced: the
 // restart-only settings it holds are the ones actually in effect, so every
@@ -264,6 +296,9 @@ func warnUnreloadable(oldCfg, newCfg *config.Config, logger *slog.Logger) {
 	}
 	if oldCfg.Metrics != newCfg.Metrics {
 		logger.Warn("metrics settings changed; restart required to apply")
+	}
+	if oldCfg.Workers != newCfg.Workers || oldCfg.VerifyTimeout != newCfg.VerifyTimeout {
+		logger.Warn("workers/verify_timeout changed; restart required to apply")
 	}
 }
 
