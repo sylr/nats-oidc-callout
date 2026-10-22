@@ -15,7 +15,7 @@ Ingress and no client-facing Service.
 # from a local checkout
 helm install my-callout contribs/chart -f my-values.yaml
 
-# or from the OCI registry (once published; --version is the released tag)
+# or from the OCI registry (once published; --version is the release tag without its `v`)
 helm install my-callout oci://ghcr.io/sylr/helm-charts/nats-oidc-callout --version 0.0.6 -f my-values.yaml
 ```
 
@@ -70,7 +70,7 @@ policy:
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `image.repository` / `image.tag` | `ghcr.io/sylr/nats-oidc-callout` / `appVersion` | Container image |
+| `image.repository` / `image.tag` | `ghcr.io/sylr/nats-oidc-callout` / `appVersion` | Container image. Released charts set `appVersion` to the git tag with its `v` (e.g. `v0.0.6`), matching the published image tag |
 | `replicaCount` | `1` | Replicas (multiple instances share work via the NATS callout queue group) |
 | `logLevel` | `info` | `-log-level` flag |
 | `config.values` | demo values | Rendered verbatim into the config Secret |

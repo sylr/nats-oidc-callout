@@ -5,8 +5,12 @@ description: |
   (AWS Web Identity, GitHub Actions, Kubernetes service-account tokens) and
   mints signed NATS user JWTs.
 type: application
+# Placeholders: the release workflow (scripts/package-chart.sh) overrides both.
+# version is the git tag without its "v" (Helm needs SemVer); appVersion is the
+# git tag verbatim, "v" included, because it is the default image tag and
+# goreleaser publishes images as v<version>.
 version: 0.0.0
-appVersion: 0.0.0
+appVersion: v0.0.0
 home: https://github.com/sylr/nats-oidc-callout
 sources:
 - https://github.com/sylr/nats-oidc-callout
