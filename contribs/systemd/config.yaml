@@ -42,6 +42,11 @@ issuers:
 
 http_timeout: "10s"
 
+# Authorization concurrency and verification bounds (see the README).
+workers: 8
+verify_timeout: "1500ms"   # keep below the server's authorization timeout
+jwks_refresh_interval: "30s"
+
 # Optional Prometheus metrics endpoint.
 metrics:
   enabled: false

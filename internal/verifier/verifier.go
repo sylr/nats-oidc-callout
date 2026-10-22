@@ -60,6 +60,10 @@ type Options struct {
 	// (e.g. an in-cluster Kubernetes issuer signed by the cluster CA). Nil uses
 	// the system roots.
 	RootCAs *x509.CertPool
+	// JWKSRefreshInterval is the minimum interval between JWKS refreshes of an
+	// issuer triggered by a token whose key is not cached. Defaults to
+	// DefaultJWKSRefreshInterval.
+	JWKSRefreshInterval time.Duration
 }
 
 // IssuerOption configures one trusted issuer.
@@ -114,9 +118,18 @@ func New(ctx context.Context, opts Options) (*Verifier, error) {
 		if err != nil {
 			return nil, fmt.Errorf("verifier: OIDC discovery for %q: %w", iss.URL, err)
 		}
+		var meta struct {
+			JWKSURL string `json:"jwks_uri"`
+		}
+		if err := provider.Claims(&meta); err != nil || meta.JWKSURL == "" {
+			return nil, fmt.Errorf("verifier: OIDC discovery for %q: no jwks_uri", iss.URL)
+		}
+		// Throttled key set instead of the provider's RemoteKeySet, which
+		// refetches the JWKS on every unknown key ID (see keySet).
+		keys := newKeySet(meta.JWKSURL, httpClient, opts.SigningAlgs, opts.JWKSRefreshInterval)
 		// SkipClientIDCheck: audience is validated explicitly against the
 		// allowlist in Verify (the token may carry several audiences).
-		oidcVerifier := provider.Verifier(&oidc.Config{
+		oidcVerifier := oidc.NewVerifier(iss.URL, keys, &oidc.Config{
 			SkipClientIDCheck:    true,
 			SupportedSigningAlgs: opts.SigningAlgs,
 		})

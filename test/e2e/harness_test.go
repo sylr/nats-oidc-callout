@@ -18,6 +18,7 @@ import (
 
 	"github.com/sylr/nats-oidc-callout/internal/authz"
 	"github.com/sylr/nats-oidc-callout/internal/callout"
+	"github.com/sylr/nats-oidc-callout/internal/config"
 	"github.com/sylr/nats-oidc-callout/internal/metrics"
 	"github.com/sylr/nats-oidc-callout/internal/mockoidc"
 	"github.com/sylr/nats-oidc-callout/internal/verifier"
@@ -136,7 +137,7 @@ authorization {
 	}
 
 	m := metrics.New()
-	authorizer := callout.New(v, policy, accountKP, discardLogger(), m)
+	authorizer := callout.New(v, policy, accountKP, discardLogger(), m, 0)
 
 	svcConn, err := nats.Connect(srv.ClientURL(), nats.UserInfo(authUser, authPassword))
 	if err != nil {
@@ -148,6 +149,7 @@ authorization {
 		calloutlib.Authorizer(authorizer.Authorize),
 		calloutlib.ResponseSignerKey(accountKP),
 		calloutlib.EncryptionKey(xkeyKP),
+		calloutlib.AsyncWorkers(config.DefaultWorkers),
 	)
 	if err != nil {
 		t.Fatalf("start callout service: %v", err)

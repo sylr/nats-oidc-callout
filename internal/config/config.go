@@ -40,6 +40,21 @@ type Config struct {
 	// HTTPTimeout bounds OIDC discovery and JWKS fetches.
 	HTTPTimeout time.Duration `yaml:"http_timeout"`
 
+	// Workers is the number of authorization requests processed concurrently.
+	// Requests beyond that wait in the callout library's fixed queue (5000);
+	// when it is full they are dropped and the server times them out.
+	Workers int `yaml:"workers"`
+
+	// VerifyTimeout bounds the verification of one token, including any JWKS
+	// refresh it waits for. Keep it below the NATS server's authorization
+	// timeout (2s by default, the TLS timeout + 1s with TLS).
+	VerifyTimeout time.Duration `yaml:"verify_timeout"`
+
+	// JWKSRefreshInterval is the minimum interval between JWKS refreshes of an
+	// issuer triggered by a token whose signing key is not cached. A
+	// legitimate key rotation is picked up within this interval.
+	JWKSRefreshInterval time.Duration `yaml:"jwks_refresh_interval"`
+
 	// OIDCCACert is an optional path to a PEM CA bundle used to verify the TLS
 	// of OIDC discovery / JWKS endpoints. Needed for issuers with a private CA,
 	// e.g. an in-cluster Kubernetes API server
@@ -100,6 +115,13 @@ type IssuerConfig struct {
 // DefaultHTTPTimeout is used when HTTPTimeout is unset.
 const DefaultHTTPTimeout = 10 * time.Second
 
+// Defaults for the authorization concurrency and verification settings.
+const (
+	DefaultWorkers             = 8
+	DefaultVerifyTimeout       = 1500 * time.Millisecond
+	DefaultJWKSRefreshInterval = 30 * time.Second
+)
+
 // DefaultMetricsAddress is used when the metrics endpoint is enabled without an
 // explicit address.
 const DefaultMetricsAddress = ":9090"
@@ -129,6 +151,15 @@ func Load(path string) (*Config, error) {
 
 	if cfg.HTTPTimeout == 0 {
 		cfg.HTTPTimeout = DefaultHTTPTimeout
+	}
+	if cfg.Workers == 0 {
+		cfg.Workers = DefaultWorkers
+	}
+	if cfg.VerifyTimeout == 0 {
+		cfg.VerifyTimeout = DefaultVerifyTimeout
+	}
+	if cfg.JWKSRefreshInterval == 0 {
+		cfg.JWKSRefreshInterval = DefaultJWKSRefreshInterval
 	}
 
 	if cfg.Metrics.Enabled {
@@ -174,6 +205,15 @@ func (c *Config) Validate() error {
 		if err := metrics.ValidatePath(c.Metrics.Path); err != nil {
 			return fmt.Errorf("metrics.path: %w", err)
 		}
+	}
+	if c.Workers < 0 {
+		return fmt.Errorf("workers must not be negative")
+	}
+	if c.VerifyTimeout < 0 {
+		return fmt.Errorf("verify_timeout must not be negative")
+	}
+	if c.JWKSRefreshInterval < 0 {
+		return fmt.Errorf("jwks_refresh_interval must not be negative")
 	}
 	if err := c.Policy.Validate(); err != nil {
 		return fmt.Errorf("policy: %w", err)

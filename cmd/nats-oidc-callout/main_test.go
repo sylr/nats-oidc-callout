@@ -70,7 +70,7 @@ func TestReloadKeepsWarningAboutRestartOnlySettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build verifier: %v", err)
 	}
-	a := authzcallout.New(v, &startup.Policy, accountKP, logger, nil)
+	a := authzcallout.New(v, &startup.Policy, accountKP, logger, nil, 0)
 
 	// Change a restart-only setting and reload twice.
 	writeConfig(t, path, idp.Issuer(), "nats://127.0.0.1:5222", string(seed))
@@ -129,7 +129,7 @@ func TestReloadRejectsUnknownField(t *testing.T) {
 
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
-	a := authzcallout.New(nil, &cfg.Policy, nil, logger, nil)
+	a := authzcallout.New(nil, &cfg.Policy, nil, logger, nil, 0)
 
 	reloadConfig(context.Background(), path, cfg, a, logger)
 	out := logs.String()

@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,6 +35,10 @@ type Server struct {
 	httpSrv *httptest.Server
 	mu      sync.Mutex
 	keys    []*key // keys[0] is the default signer
+
+	jwksRequests atomic.Int64
+	jwksGate     chan struct{} // when non-nil, JWKS requests block until it is closed
+	jwksEntered  chan struct{} // signalled when a request reaches the gate
 }
 
 // New starts a mock OIDC IdP with one RSA signing key and returns it. The caller
@@ -200,7 +205,48 @@ func (s *Server) handleDiscovery(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, doc)
 }
 
-func (s *Server) handleJWKS(w http.ResponseWriter, _ *http.Request) {
+// JWKSRequests returns how many times the JWKS endpoint has been requested.
+func (s *Server) JWKSRequests() int { return int(s.jwksRequests.Load()) }
+
+// HoldJWKS makes subsequent JWKS requests block until release is called (or
+// the test ends). entered receives a value each time a request reaches the hold.
+func (s *Server) HoldJWKS(t *testing.T) (entered <-chan struct{}, release func()) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	gate := make(chan struct{})
+	s.jwksGate = gate
+	s.jwksEntered = make(chan struct{}, 64)
+	var once sync.Once
+	release = func() {
+		once.Do(func() {
+			s.mu.Lock()
+			s.jwksGate = nil
+			s.mu.Unlock()
+			close(gate)
+		})
+	}
+	t.Cleanup(release)
+	return s.jwksEntered, release
+}
+
+func (s *Server) handleJWKS(w http.ResponseWriter, r *http.Request) {
+	s.jwksRequests.Add(1)
+	s.mu.Lock()
+	gate, entered := s.jwksGate, s.jwksEntered
+	s.mu.Unlock()
+	if gate != nil {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		select {
+		case <-gate:
+		case <-r.Context().Done():
+			return
+		}
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	keys := make([]map[string]any, 0, len(s.keys))

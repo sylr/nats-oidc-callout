@@ -56,6 +56,12 @@ config:
     - "RS256"
     issuers: []
     http_timeout: "10s"
+    # Concurrent authorizations, per-token verification deadline (keep it below
+    # the NATS server's authorization timeout) and minimum interval between
+    # JWKS refreshes. See the project README.
+    workers: 8
+    verify_timeout: "1500ms"
+    jwks_refresh_interval: "30s"
     metrics:
       enabled: true
       address: ":9090"
