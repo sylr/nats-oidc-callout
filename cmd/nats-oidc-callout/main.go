@@ -174,7 +174,11 @@ func buildVerifier(ctx context.Context, cfg *config.Config) (*verifier.Verifier,
 // the previous config keeps serving. Settings that can't be hot-swapped (NATS
 // connection, signing/xkey seeds, metrics endpoint) are reported as needing a
 // restart.
-func watchReloads(ctx context.Context, configPath string, current *config.Config, a *authzcallout.Authorizer, logger *slog.Logger) {
+//
+// startup is the config the process started with. It is never replaced: the
+// restart-only settings it holds are the ones actually in effect, so every
+// reload is compared against it rather than against the previous reload.
+func watchReloads(ctx context.Context, configPath string, startup *config.Config, a *authzcallout.Authorizer, logger *slog.Logger) {
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 	defer signal.Stop(hup)
@@ -185,23 +189,29 @@ func watchReloads(ctx context.Context, configPath string, current *config.Config
 			return
 		case <-hup:
 			logger.Info("SIGHUP received; reloading config", "path", configPath)
-			newCfg, err := config.Load(configPath)
-			if err != nil {
-				logger.Error("config reload failed; keeping previous config", "error", err)
-				continue
-			}
-			warnUnreloadable(current, newCfg, logger)
-			v, err := buildVerifier(ctx, newCfg)
-			if err != nil {
-				logger.Error("config reload failed; keeping previous config", "error", err)
-				continue
-			}
-			a.Reload(v, &newCfg.Policy)
-			current = newCfg
-			logger.Info("config reloaded",
-				"issuers", len(newCfg.Issuers), "policy_rules", len(newCfg.Policy.Rules))
+			reloadConfig(ctx, configPath, startup, a, logger)
 		}
 	}
+}
+
+// reloadConfig performs a single reload: it re-reads configPath, warns about
+// restart-only settings that differ from startup, and swaps in the new verifier
+// and policy if they build successfully.
+func reloadConfig(ctx context.Context, configPath string, startup *config.Config, a *authzcallout.Authorizer, logger *slog.Logger) {
+	newCfg, err := config.Load(configPath)
+	if err != nil {
+		logger.Error("config reload failed; keeping previous config", "error", err)
+		return
+	}
+	warnUnreloadable(startup, newCfg, logger)
+	v, err := buildVerifier(ctx, newCfg)
+	if err != nil {
+		logger.Error("config reload failed; keeping previous config", "error", err)
+		return
+	}
+	a.Reload(v, &newCfg.Policy)
+	logger.Info("config reloaded",
+		"issuers", len(newCfg.Issuers), "policy_rules", len(newCfg.Policy.Rules))
 }
 
 // warnUnreloadable logs a warning for each setting that changed but can only take
