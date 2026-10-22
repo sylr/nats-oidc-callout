@@ -102,6 +102,39 @@ Run:
 nats-oidc-callout -config examples/config.yaml
 ```
 
+### Permissions
+
+Each rule's `grant` sets `publish` and `subscribe` independently:
+
+| `grant.publish` / `grant.subscribe` | Effect |
+|-------------------------------------|--------|
+| omitted | **deny all** in that direction (emitted as `deny: [">"]`) |
+| `{ allow: [...] }` | only the listed subjects (minus any `deny`) |
+| `{ deny: [...] }` | everything except the listed subjects |
+| `{ allow: [">"] }` | unrestricted |
+| present but empty (`{}`, `{ allow: [] }`) | **rejected** at load |
+
+```yaml
+grant:
+  account: APP
+  subscribe: { allow: ["svc.echo"] }  # publish omitted → denied
+  response: { max: 1, ttl: "1m" }     # …but replies to received requests still work
+```
+
+A `response` grant lets the user reply to requests it receives even with
+`publish` omitted: the NATS server tracks each delivered reply subject and
+allows publishes to it within the `max`/`ttl` limits.
+
+Because the user JWT always carries explicit permissions, the target account's
+`default_permissions` never apply to users issued by this service.
+
+> **Breaking change:** earlier releases passed an omitted or empty permission
+> through as-is, which NATS treats as **unrestricted**. An omitted direction now
+> denies everything; add `allow: [">"]` where unrestricted access was intended.
+> The config and policy files are also decoded strictly: an **unknown or
+> misspelt key** at any level (e.g. `alow`, `require_claim`, `isuer`) fails
+> startup, and fails a SIGHUP reload while the previous config keeps serving.
+
 ## AWS setup (real tokens)
 
 Outbound web identity federation must be enabled on the account, and the calling
@@ -196,7 +229,7 @@ issuers:
 - match:
     issuer: "https://token.actions.githubusercontent.com"
     claims: { repository: "your-org/your-repo" }  # pin the repo, not just the owner
-  grant: { account: APP, subscribe: { allow: ["telemetry.>"] } }
+  grant: { account: APP, subscribe: { allow: ["telemetry.>"] } }  # publish omitted → denied
 ```
 
 > **Trust scoping:** GitHub's issuer is shared across *all* of GitHub.
@@ -331,7 +364,7 @@ other conditions and required to evaluate to a bool:
     issuer: "https://token.actions.githubusercontent.com"
     expr: 'claims["repository_owner"] == "sylr" && claims["ref"].startsWith("refs/heads/")'
     allow_broad: true   # required for any expr rule
-  grant: { account: APP, subscribe: { allow: ["telemetry.>"] } }
+  grant: { account: APP, subscribe: { allow: ["telemetry.>"] } }  # publish omitted → denied
 ```
 
 Variables: `sub` (string), `iss` (string), `aud` (list), `claims`
@@ -385,6 +418,8 @@ Disabled by default — no listener is opened and nothing is collected unless
     appears to contain: alternation or grouping can widen it
     (`re:^arn:aws:iam::123456789012:role/.*|.*$` matches every subject). Pair it
     with `claims: { aws.aws_account: "123456789012" }`, or set `allow_broad: true`.
+- An omitted `publish`/`subscribe` grant **denies all**; unrestricted access
+  requires an explicit `allow: [">"]`. Unknown config/policy keys fail the load.
 - The service **fails closed**: any verification/policy error denies the connect.
 
 ## Tests
@@ -399,7 +434,8 @@ E2E_AWS=1 AWS_REGION=us-east-1 E2E_AWS_AUDIENCE=nats://callout-e2e \
 The hermetic suite runs an in-process OIDC IdP that mints provider-shaped tokens
 and an embedded `nats-server` configured with auth callout, covering both the
 happy path and fail-closed cases (no/expired/malformed token, wrong audience,
-untrusted issuer, claim-binding mismatch, unmatched policy, out-of-grant publish).
+untrusted issuer, claim-binding mismatch, unmatched policy, out-of-grant publish/
+subscribe, omitted-direction deny-all, reply via a `response` grant).
 
 A **real GitHub Actions** e2e (`test/e2e/github_test.go`) runs automatically in
 CI — the `test` job has `permissions: id-token: write`, so the test mints a real

@@ -165,8 +165,8 @@ func appPolicy(arn string) *authz.Policy {
 		Match: authz.Match{Sub: arn},
 		Grant: authz.Grant{
 			Account:   "APP",
-			Publish:   authz.Permission{Allow: []string{"app.>"}},
-			Subscribe: authz.Permission{Allow: []string{"app.>", "_INBOX.>"}},
+			Publish:   &authz.Permission{Allow: []string{"app.>"}},
+			Subscribe: &authz.Permission{Allow: []string{"app.>", "_INBOX.>"}},
 		},
 	}}}
 	return p

@@ -15,6 +15,11 @@
 # literal account pins via a glob sub (12 digits in the ARN account field, no
 # "*" before it) or the aws.aws_account claim; a "re:" sub never pins on its own.
 #
+# Permissions: an omitted publish/subscribe denies everything in that direction;
+# use allow: [">"] for unrestricted access. A present but empty block ({}) is
+# rejected. A response grant still lets the user reply to requests it receives
+# with publish omitted. Unknown keys anywhere in this file fail the load.
+#
 # For conditions the declarative matchers can't express, a rule may add an
 # optional CEL expression (must evaluate to bool), AND-ed with the rest. Its
 # variables are sub, iss, aud, claims, exp, now. An expr cannot be statically

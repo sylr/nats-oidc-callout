@@ -94,3 +94,52 @@ func TestReloadKeepsWarningAboutRestartOnlySettings(t *testing.T) {
 		t.Errorf("reverted config should not warn:\n%s", out)
 	}
 }
+
+const strictReloadConfig = `
+nats:
+  url: "nats://127.0.0.1:4222"
+issuer_account_seed: "SA-not-parsed-by-load"
+audiences: ["nats://callout"]
+signing_algs: ["RS256"]
+issuers:
+- url: "https://issuer"
+policy:
+  rules:
+  - match: { sub: "arn:aws:iam::123456789012:role/AppRole" }
+    grant: { account: APP, publish: { allow: ["app.>"] } }
+`
+
+// TestReloadRejectsUnknownField proves a reload of a config with a misspelt
+// permission field is rejected and never applied, so the previous config keeps
+// serving.
+func TestReloadRejectsUnknownField(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(strictReloadConfig), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("initial Load: %v", err)
+	}
+
+	typo := strings.Replace(strictReloadConfig, "allow:", "alow:", 1)
+	if err := os.WriteFile(path, []byte(typo), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	a := authzcallout.New(nil, &cfg.Policy, nil, logger, nil)
+
+	reloadConfig(context.Background(), path, cfg, a, logger)
+	out := logs.String()
+	if !strings.Contains(out, "config reload failed") {
+		t.Fatalf("no reload failure logged; logs:\n%s", out)
+	}
+	if !strings.Contains(out, "alow") {
+		t.Errorf("reload error does not name the unknown field; logs:\n%s", out)
+	}
+	if strings.Contains(out, "config reloaded") {
+		t.Errorf("invalid config was applied; logs:\n%s", out)
+	}
+}

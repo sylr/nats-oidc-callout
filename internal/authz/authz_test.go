@@ -1,6 +1,10 @@
 package authz
 
 import (
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,7 +26,7 @@ func TestExactARNMatch(t *testing.T) {
 	p := &Policy{Rules: []Rule{{
 		Name:  "data-role",
 		Match: Match{Sub: "arn:aws:iam::123456789012:role/DataRole"},
-		Grant: Grant{Account: "APP", Publish: Permission{Allow: []string{"app.>"}}},
+		Grant: Grant{Account: "APP", Publish: &Permission{Allow: []string{"app.>"}}},
 	}}}
 	mustValidate(t, p)
 
@@ -305,5 +309,170 @@ func TestMissingAccountRejected(t *testing.T) {
 	p := &Policy{Rules: []Rule{{Match: Match{Sub: "arn:aws:iam::1:role/r"}}}}
 	if err := p.Validate(); err == nil {
 		t.Fatal("expected error for missing grant.account")
+	}
+}
+
+// writePolicy writes body to a temporary policy file and returns its path.
+func writePolicy(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+	return path
+}
+
+func TestLoadPolicyValid(t *testing.T) {
+	p, err := LoadPolicy(writePolicy(t, `
+rules:
+- name: app
+  match:
+    issuer: "https://issuer"
+    sub: "arn:aws:iam::123456789012:role/AppRole"
+  grant:
+    account: APP
+    publish: { allow: ["app.>"], deny: ["app.secret"] }
+    subscribe: { allow: ["app.>", "_INBOX.>"] }
+    response: { max: 1, ttl: "1m" }
+    max_expiry: "1h"
+`))
+	if err != nil {
+		t.Fatalf("LoadPolicy: %v", err)
+	}
+	if g := p.Rules[0].Grant; g.MaxExpiry != time.Hour || g.Response == nil || g.Response.TTL != time.Minute {
+		t.Errorf("grant = %+v", g)
+	}
+}
+
+func TestLoadPolicyRejectsUnknownFields(t *testing.T) {
+	// Each case misspells one field at a different nesting level; the typo must
+	// fail the load rather than silently dropping the restriction it carried.
+	for name, tc := range map[string]struct{ body, field string }{
+		"top level": {field: "rule", body: `
+rule:
+- match: { sub: "arn:aws:iam::123456789012:role/AppRole" }
+  grant: { account: APP }
+`},
+		"rule": {field: "matches", body: `
+rules:
+- matches: { sub: "arn:aws:iam::123456789012:role/AppRole" }
+  grant: { account: APP }
+`},
+		"match": {field: "isuer", body: `
+rules:
+- match: { isuer: "https://issuer", sub: "arn:aws:iam::123456789012:role/AppRole" }
+  grant: { account: APP }
+`},
+		"grant": {field: "publsh", body: `
+rules:
+- match: { sub: "arn:aws:iam::123456789012:role/AppRole" }
+  grant: { account: APP, publsh: { allow: ["app.>"] } }
+`},
+		"permission": {field: "alow", body: `
+rules:
+- match: { sub: "arn:aws:iam::123456789012:role/AppRole" }
+  grant:
+    account: APP
+    publish: { alow: ["app.>"] }
+    subscribe: { allow: [">"] }
+`},
+		"response": {field: "max_msgs", body: `
+rules:
+- match: { sub: "arn:aws:iam::123456789012:role/AppRole" }
+  grant: { account: APP, response: { max_msgs: 1 } }
+`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := LoadPolicy(writePolicy(t, tc.body))
+			if err == nil {
+				t.Fatal("expected unknown-field error")
+			}
+			if !strings.Contains(err.Error(), tc.field) {
+				t.Errorf("error %q does not name field %q", err, tc.field)
+			}
+		})
+	}
+}
+
+func TestLoadPolicyEmptyFile(t *testing.T) {
+	_, err := LoadPolicy(writePolicy(t, ""))
+	if err == nil || !strings.Contains(err.Error(), "no rules") {
+		t.Fatalf("err = %v, want a no-rules validation error", err)
+	}
+}
+
+func TestLoadPolicyRejectsExtraDocument(t *testing.T) {
+	_, err := LoadPolicy(writePolicy(t, `
+rules:
+- match: { sub: "arn:aws:iam::123456789012:role/AppRole" }
+  grant: { account: APP }
+---
+rules: []
+`))
+	if err == nil {
+		t.Fatal("expected error for a second YAML document")
+	}
+}
+
+func TestOmittedPermissionDeniesAll(t *testing.T) {
+	p := &Policy{Rules: []Rule{{
+		Match: Match{Sub: "arn:aws:iam::123456789012:role/Svc"},
+		Grant: Grant{Account: "APP", Response: &Response{Max: 1}},
+	}}}
+	mustValidate(t, p)
+	d, err := p.Evaluate(id("arn:aws:iam::123456789012:role/Svc", nil))
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	for dir, perm := range map[string][2][]string{
+		"pub": {d.Permissions.Pub.Allow, d.Permissions.Pub.Deny},
+		"sub": {d.Permissions.Sub.Allow, d.Permissions.Sub.Deny},
+	} {
+		if len(perm[0]) != 0 || !slices.Equal(perm[1], []string{">"}) {
+			t.Errorf("%s = allow %v deny %v, want deny [>]", dir, perm[0], perm[1])
+		}
+	}
+	// The response grant is still rendered, so replies remain possible.
+	if d.Permissions.Resp == nil {
+		t.Error("response permission dropped")
+	}
+}
+
+func TestEmptyPermissionRejected(t *testing.T) {
+	for _, body := range []string{
+		`publish: {}`,
+		`publish: { allow: [], deny: [] }`,
+		`subscribe: {}`,
+	} {
+		_, err := LoadPolicy(writePolicy(t, `
+rules:
+- match: { sub: "arn:aws:iam::123456789012:role/AppRole" }
+  grant: { account: APP, `+body+` }
+`))
+		if err == nil || !strings.Contains(err.Error(), "neither allow nor deny") {
+			t.Errorf("%s: err = %v, want empty-permission error", body, err)
+		}
+	}
+}
+
+func TestExplicitPermissionsRendered(t *testing.T) {
+	p := &Policy{Rules: []Rule{{
+		Match: Match{Sub: "arn:aws:iam::123456789012:role/Svc"},
+		Grant: Grant{
+			Account:   "APP",
+			Publish:   &Permission{Allow: []string{">"}},
+			Subscribe: &Permission{Deny: []string{"secret.>"}},
+		},
+	}}}
+	mustValidate(t, p)
+	d, err := p.Evaluate(id("arn:aws:iam::123456789012:role/Svc", nil))
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if !slices.Equal(d.Permissions.Pub.Allow, []string{">"}) || len(d.Permissions.Pub.Deny) != 0 {
+		t.Errorf("pub = %+v, want allow [>]", d.Permissions.Pub)
+	}
+	if len(d.Permissions.Sub.Allow) != 0 || !slices.Equal(d.Permissions.Sub.Deny, []string{"secret.>"}) {
+		t.Errorf("sub = %+v, want deny [secret.>]", d.Permissions.Sub)
 	}
 }

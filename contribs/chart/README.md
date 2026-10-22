@@ -63,8 +63,15 @@ policy:
     rules:
     - name: k8s-app
       match: { issuer: "https://...", sub: "system:serviceaccount:team:app" }
-      grant: { account: APP, publish: { allow: ["app.>"] } }
+      grant:
+        account: APP
+        publish: { allow: ["app.>"] }
+        subscribe: { allow: ["app.>", "_INBOX.>"] }  # omit a direction to deny it entirely
 ```
+
+The binary decodes the config and policy strictly: an unknown or misspelt key
+(e.g. `alow`, `require_claim`) makes the pod fail to start, and a hot reload
+with such a key is rejected while the previous config keeps serving.
 
 ## Key values
 

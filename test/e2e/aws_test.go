@@ -60,8 +60,8 @@ func TestAWSRealToken(t *testing.T) {
 		Match: authz.Match{Issuer: iss, Sub: sub, Claims: map[string]string{"aws.aws_account": account}},
 		Grant: authz.Grant{
 			Account:   "APP",
-			Publish:   authz.Permission{Allow: []string{"app.>"}},
-			Subscribe: authz.Permission{Allow: []string{"app.>", "_INBOX.>"}},
+			Publish:   &authz.Permission{Allow: []string{"app.>"}},
+			Subscribe: &authz.Permission{Allow: []string{"app.>", "_INBOX.>"}},
 		},
 	}}}
 
