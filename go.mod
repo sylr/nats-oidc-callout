@@ -1,6 +1,6 @@
 module github.com/sylr/nats-oidc-callout
 
-go 1.26.4
+go 1.26.10
 
 require (
 	github.com/coreos/go-oidc/v3 v3.19.0

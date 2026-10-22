@@ -65,7 +65,7 @@
 
           stablePackages = with pkgs; [
             gh
-            go_1_26     # bootstrap; go.mod's `go 1.26.4` directive selects the exact toolchain
+            go_1_26     # bootstrap; go.mod's `go 1.26.10` directive selects the exact toolchain
             goreleaser  # release-config check (ci goreleaser-check)
             kind        # k8s e2e: spins up the ephemeral cluster (test/k8s/run.sh)
             kubectl     # k8s e2e: applies manifests, waits on the client jobs

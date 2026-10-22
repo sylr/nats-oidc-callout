@@ -1,6 +1,6 @@
 module github.com/sylr/nats-oidc-callout/lib/k8sauth
 
-go 1.26.4
+go 1.26.10
 
 require github.com/nats-io/nats.go v1.52.0
 
