@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -95,5 +96,46 @@ func TestLoadEmptyFile(t *testing.T) {
 	_, err := Load(writeFile(t, t.TempDir(), "config.yaml", ""))
 	if err == nil || !strings.Contains(err.Error(), "nats.url is required") {
 		t.Fatalf("err = %v, want a required-field validation error", err)
+	}
+}
+
+// TestLoadRejectsReservedMetricsPath checks that a metrics path ServeMux would
+// treat as one of the health endpoints is refused at load time instead of
+// panicking when the endpoint starts.
+func TestLoadRejectsReservedMetricsPath(t *testing.T) {
+	for _, tc := range []struct {
+		path    string
+		wantErr bool
+	}{
+		{"/metrics", false},
+		{"/readyz", true},
+		{"/%72eadyz", true},
+		{"//healthz", true},
+		{"metrics", true},
+	} {
+		cfg := fmt.Sprintf(`
+nats: { url: "nats://127.0.0.1:4222" }
+issuer_account_seed: "SAAM7VLIAS7RMLKZENKSQKCTJ3SHWEHCSZ7VIBGAZMYXVYMHN2Z7LLZUCE"
+audiences: ["nats://test"]
+signing_algs: ["RS256"]
+issuers: [ { url: "https://issuer.example" } ]
+metrics: { enabled: true, path: %q }
+policy:
+  rules:
+  - name: app
+    match: { sub: "arn:aws:iam::123456789012:role/AppRole" }
+    grant: { account: APP }
+`, tc.path)
+		p := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(p, []byte(cfg), 0o600); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		_, err := Load(p)
+		if tc.wantErr && (err == nil || !strings.Contains(err.Error(), "metrics.path")) {
+			t.Errorf("path %q: Load error = %v, want a metrics.path error", tc.path, err)
+		}
+		if !tc.wantErr && err != nil {
+			t.Errorf("path %q: Load error = %v, want nil", tc.path, err)
+		}
 	}
 }

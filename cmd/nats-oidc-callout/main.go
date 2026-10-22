@@ -18,7 +18,10 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
+	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nkeys"
@@ -55,13 +58,17 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(logger, *configPath); err != nil {
+	if err := run(context.Background(), logger, *configPath); err != nil {
 		logger.Error("service exited with error", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(logger *slog.Logger, configPath string) error {
+// run starts the service and blocks until ctx is cancelled or SIGINT/SIGTERM is
+// received (returning nil), or until the NATS connection or the callout service
+// stops for good (returning an error, so the process exits non-zero and its
+// supervisor restarts it).
+func run(ctx context.Context, logger *slog.Logger, configPath string) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
@@ -82,7 +89,7 @@ func run(logger *slog.Logger, configPath string) error {
 
 	// Build the verifier (performs OIDC discovery) before connecting, so a bad
 	// issuer config fails fast.
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	v, err := buildVerifier(ctx, cfg)
@@ -90,8 +97,20 @@ func run(logger *slog.Logger, configPath string) error {
 		return err
 	}
 
-	// Optional Prometheus metrics endpoint. Bind synchronously so a bad address
-	// fails startup, then serve in the background.
+	// Readiness: the NATS connection is up and the callout service is running.
+	// nc and svc are only read once started is set, after both are assigned.
+	var (
+		nc      *nats.Conn
+		svc     *callout.AuthorizationService
+		started atomic.Bool
+	)
+	ready := func() bool {
+		return started.Load() && nc.Status() == nats.CONNECTED && !svc.Service.Stopped()
+	}
+
+	// Optional Prometheus metrics endpoint, which also serves the health
+	// probes. Bind synchronously so a bad address fails startup, then serve in
+	// the background.
 	var m *metrics.Metrics
 	if cfg.Metrics.Enabled {
 		m = metrics.New()
@@ -100,41 +119,61 @@ func run(logger *slog.Logger, configPath string) error {
 			return fmt.Errorf("metrics listen on %q: %w", cfg.Metrics.Address, err)
 		}
 		go func() {
-			if err := m.Serve(ctx, ln, cfg.Metrics.Path, logger); err != nil {
+			if err := m.Serve(ctx, ln, cfg.Metrics.Path, ready, logger); err != nil {
 				logger.Error("metrics server error", "error", err)
 			}
 		}()
 	}
 
-	nc, err := connectNATS(cfg.NATS)
+	nc, natsFailed, err := connectNATS(cfg.NATS, logger)
 	if err != nil {
 		return fmt.Errorf("connect to NATS: %w", err)
 	}
 	defer nc.Close()
+	m.TrackNATSConnection(nc.IsConnected)
 	logger.Info("connected to NATS", "url", nc.ConnectedUrl())
 
 	authorizer := authzcallout.New(v, &cfg.Policy, signKey, logger, m)
 
+	// The callout library reports every error through this callback. ErrService
+	// marks a failure of the underlying NATS micro service, which then stops
+	// itself and no longer receives authorization requests.
+	svcFailed := make(chan error, 1)
 	opts := []callout.Option{
 		callout.Authorizer(authorizer.Authorize),
 		callout.ResponseSignerKey(signKey),
+		callout.ErrCallback(func(err error) {
+			if errors.Is(err, callout.ErrService) {
+				select {
+				case svcFailed <- err:
+				default:
+				}
+			}
+		}),
 	}
 	if xkey != nil {
 		opts = append(opts, callout.EncryptionKey(xkey))
 	}
 
-	svc, err := callout.NewAuthorizationService(nc, opts...)
+	svc, err = callout.NewAuthorizationService(nc, opts...)
 	if err != nil {
 		return fmt.Errorf("start callout service: %w", err)
 	}
 	defer func() { _ = svc.Stop() }()
+	started.Store(true)
 
 	go watchReloads(ctx, configPath, cfg, authorizer, logger)
 
 	logger.Info("auth callout service started; waiting for requests")
-	<-ctx.Done()
-	logger.Info("shutting down")
-	return nil
+	select {
+	case <-ctx.Done():
+		logger.Info("shutting down")
+		return nil
+	case err := <-natsFailed:
+		return err
+	case err := <-svcFailed:
+		return fmt.Errorf("callout service stopped: %w", err)
+	}
 }
 
 // buildVerifier constructs the OIDC verifier from the configured issuers
@@ -228,9 +267,60 @@ func warnUnreloadable(oldCfg, newCfg *config.Config, logger *slog.Logger) {
 	}
 }
 
-func connectNATS(cfg config.NATSConfig) (*nats.Conn, error) {
+// NATS reconnect policy. The service reconnects forever: giving up would leave
+// a live process that can no longer authorize anyone.
+const (
+	natsReconnectWait      = 2 * time.Second
+	natsReconnectJitter    = 500 * time.Millisecond
+	natsReconnectJitterTLS = time.Second
+)
+
+// connectNATS dials NATS with an unlimited reconnect policy and logs connection
+// state transitions and asynchronous errors. The returned channel receives an
+// error when the connection becomes permanently unusable for the callout:
+//   - it is closed for good (on shutdown, or when the client gives up, e.g. the
+//     server rejects its credentials twice in a row on reconnect);
+//   - the server revokes the subscription to the auth callout subject (a
+//     permissions change on reload or reconnect). The connection stays up but
+//     no authorization request reaches the service any more, and nats.go only
+//     resubscribes after a reconnect, so the process must restart.
+func connectNATS(cfg config.NATSConfig, logger *slog.Logger) (*nats.Conn, <-chan error, error) {
+	failed := make(chan error, 1)
+	fail := func(err error) {
+		select {
+		case failed <- err:
+		default:
+		}
+	}
+	authSubViolation := fmt.Sprintf("Subscription to %q", callout.SysRequestUserAuthSubj)
 	opts := []nats.Option{
 		nats.Name("nats-oidc-callout"),
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(natsReconnectWait),
+		nats.ReconnectJitter(natsReconnectJitter, natsReconnectJitterTLS),
+		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
+			logger.Warn("disconnected from NATS; reconnecting", "error", err)
+		}),
+		nats.ReconnectHandler(func(nc *nats.Conn) {
+			logger.Info("reconnected to NATS", "url", nc.ConnectedUrl())
+		}),
+		nats.ClosedHandler(func(nc *nats.Conn) {
+			logger.Info("NATS connection closed", "error", nc.LastError())
+			err := errors.New("NATS connection closed permanently")
+			if last := nc.LastError(); last != nil {
+				err = fmt.Errorf("%w: %w", err, last)
+			}
+			fail(err)
+		}),
+		// The callout's micro service wraps this handler and still calls it.
+		// Permission violations arrive here with a nil subscription, so micro
+		// neither reports them to the callout library nor stops the service.
+		nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, err error) {
+			logger.Warn("NATS asynchronous error", "error", err)
+			if errors.Is(err, nats.ErrPermissionViolation) && strings.Contains(err.Error(), authSubViolation) {
+				fail(fmt.Errorf("subscription to the auth callout subject revoked: %w", err))
+			}
+		}),
 	}
 	switch {
 	case cfg.Credentials != "":
@@ -241,13 +331,17 @@ func connectNATS(cfg config.NATSConfig) (*nats.Conn, error) {
 
 	tlsCfg, err := tlsConfig(cfg)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if tlsCfg != nil {
 		opts = append(opts, nats.Secure(tlsCfg))
 	}
 
-	return nats.Connect(cfg.URL, opts...)
+	nc, err := nats.Connect(cfg.URL, opts...)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nc, failed, nil
 }
 
 func tlsConfig(cfg config.NATSConfig) (*tls.Config, error) {

@@ -69,7 +69,9 @@ http_timeout: "10s"
 
 # Optional Prometheus metrics endpoint. When enabled, exposes counters/histograms
 # (authorization_requests_total, authorization_denials_total,
-# authorization_duration_seconds) plus Go runtime/process metrics.
+# authorization_duration_seconds, nats_connected) plus Go runtime/process
+# metrics. The same listener serves the /healthz (liveness) and /readyz
+# (readiness: NATS connected and callout service running) probes.
 metrics:
   enabled: true
   address: ":9090"

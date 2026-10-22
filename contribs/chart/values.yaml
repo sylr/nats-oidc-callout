@@ -135,9 +135,11 @@ resources:
   limits:
     memory: 128Mi
 
-# TCP probes against the metrics port. Only used when metrics.enabled is true
-# (the distroless image has no shell, so exec probes are not possible and there
-# is no dedicated health endpoint).
+# HTTP probes served on the metrics port. Only used when metrics.enabled is true.
+# Liveness hits /healthz, which answers while the process is up and does not
+# depend on NATS (a broker outage must not restart the pod). Readiness hits
+# /readyz, which answers 200 only while the NATS connection is up and the
+# callout service is running.
 livenessProbe:
   enabled: true
   initialDelaySeconds: 5
