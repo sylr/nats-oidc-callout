@@ -36,6 +36,21 @@
 // location under the user cache directory. The token is a credential: the cache
 // file is written atomically with 0600 permissions.
 //
+// A cache entry is bound to the AWS credentials that minted it: the file records
+// a fingerprint (a hash, never the key itself) of the access key ID of the
+// credentials the STS client signs with (including any aws.Config.ServiceOptions
+// override), and is a miss when the current credentials resolve to a different
+// access key ID. Switching AWS profile, role or account therefore never reuses
+// the previous principal's token. Credentials are resolved once per mint and the
+// STS call is signed with exactly those credentials, so the recorded binding
+// always matches the principal that minted the token. They are retrieved through
+// the SDK's own credentials cache, so this does not add an STS call per cache
+// hit. Processes share an entry only while
+// they resolve the same access key ID: long-lived keys and cached SSO
+// credentials do; a profile that calls sts:AssumeRole on every process start
+// receives fresh keys each time and so does not benefit from the cache. Delete
+// the cache file to invalidate it manually.
+//
 // # Versioning
 //
 // This is a nested Go module. External consumers import it as
@@ -121,8 +136,10 @@ type Config struct {
 	// this file (created with 0600, parent directory with 0700, written
 	// atomically). A cached token (with a matching audience) is reused as long
 	// as it has not expired; only a missing, corrupt, expired, or wrong-audience
-	// cache forces a blocking mint. See DefaultCachePath for a per-audience
-	// location under the user cache dir.
+	// cache forces a blocking mint. A cached token is additionally bound to the
+	// AWS access key ID of the credentials that minted it (see the package
+	// documentation). See DefaultCachePath for a per-audience location under the
+	// user cache dir.
 	CachePath string
 	// CacheRefreshBefore is how close to expiry a cached token may be before
 	// Token, having returned it, mints a replacement in the background and
@@ -167,6 +184,9 @@ type TokenSource struct {
 	duration           time.Duration
 	cachePath          string
 	cacheRefreshBefore time.Duration
+	// credentials is the provider the STS client signs with. Cache entries are
+	// bound to the credentials it yields; nil disables the cache.
+	credentials aws.CredentialsProvider
 
 	mu         sync.Mutex
 	lastErr    error
@@ -199,7 +219,15 @@ func NewFromAWSConfig(awsCfg aws.Config, cfg Config) (*TokenSource, error) {
 	if awsCfg.Region == "" {
 		return nil, errors.New("awsauth: AWS region must be set; GetWebIdentityToken is not served on the global STS endpoint")
 	}
-	return newWithClient(sts.NewFromConfig(awsCfg), cfg)
+	client := sts.NewFromConfig(awsCfg)
+	ts, err := newWithClient(client, cfg)
+	if err != nil {
+		return nil, err
+	}
+	// Take the effective provider from the client, not awsCfg.Credentials:
+	// ServiceOptions may have replaced it.
+	ts.credentials = client.Options().Credentials
+	return ts, nil
 }
 
 // newWithClient validates cfg, applies defaults, and builds the TokenSource.
@@ -233,31 +261,62 @@ func newWithClient(client stsAPI, cfg Config) (*TokenSource, error) {
 // Token returns a web identity token. When caching is enabled (Config.CachePath)
 // it returns the cached token as long as it has not expired; when that token is
 // within CacheRefreshBefore of expiry it also kicks off a background refresh so
-// later calls get a fresh token. On a cache miss (missing, corrupt, expired, or
-// wrong-audience) it mints synchronously and writes the cache (best effort — a
-// write failure does not fail the call). With caching disabled it always mints.
+// later calls get a fresh token. On a cache miss (missing, corrupt, expired,
+// wrong-audience, or minted by different AWS credentials) it mints
+// synchronously and writes the cache (best effort — a write failure does not
+// fail the call). With caching disabled it always mints.
 func (ts *TokenSource) Token(ctx context.Context) (string, error) {
+	// Resolve the credentials once and sign the STS call with exactly those, so
+	// the entry is bound to the principal that really minted the token. If they
+	// cannot be resolved the cache is bypassed (neither read nor written).
+	var credID string
+	var opts []func(*sts.Options)
+	useCache := false
 	if ts.cachePath != "" {
-		if tok, exp, ok := ts.readCache(); ok {
+		if id, opt, err := ts.pinCredentials(ctx); err == nil {
+			credID, opts, useCache = id, []func(*sts.Options){opt}, true
+		}
+	}
+	if useCache {
+		if tok, exp, ok := ts.readCache(credID); ok {
 			if time.Until(exp) < ts.cacheRefreshBefore {
 				ts.refreshAsync()
 			}
 			return tok, nil
 		}
 	}
-	tok, err := ts.mint(ctx)
+	tok, err := ts.mint(ctx, opts...)
 	if err != nil {
 		return "", err
 	}
-	if ts.cachePath != "" {
-		ts.writeCache(tok)
+	if useCache {
+		ts.writeCache(tok, credID)
 	}
 	return tok, nil
 }
 
+// pinCredentials retrieves the STS client's credentials once and returns their
+// fingerprint (a hash of the access key ID) together with an STS option that
+// signs with exactly those credentials, so a provider that changes or refreshes
+// between fingerprinting and signing cannot desynchronise the two.
+func (ts *TokenSource) pinCredentials(ctx context.Context) (credID string, opt func(*sts.Options), err error) {
+	if ts.credentials == nil {
+		return "", nil, errors.New("awsauth: no AWS credentials provider configured")
+	}
+	creds, err := ts.credentials.Retrieve(ctx)
+	if err != nil {
+		return "", nil, fmt.Errorf("awsauth: retrieve AWS credentials: %w", err)
+	}
+	sum := sha256.Sum256([]byte(creds.AccessKeyID))
+	pinned := aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) { return creds, nil })
+	return hex.EncodeToString(sum[:16]), func(o *sts.Options) { o.Credentials = pinned }, nil
+}
+
 // refreshAsync mints a fresh token and writes it to the cache in the background,
 // for callers that returned a soon-to-expire cached token. At most one refresh
-// runs per TokenSource at a time; a mint failure is recorded via LastError.
+// runs per TokenSource at a time; a mint failure is recorded via LastError. The
+// credentials are resolved afresh here, so the refreshed entry is bound to the
+// principal that minted it, which may differ from the caller's.
 func (ts *TokenSource) refreshAsync() {
 	ts.mu.Lock()
 	if ts.refreshing {
@@ -277,24 +336,29 @@ func (ts *TokenSource) refreshAsync() {
 		// so use an independent, bounded context.
 		ctx, cancel := context.WithTimeout(context.Background(), DefaultFetchTimeout)
 		defer cancel()
-		tok, err := ts.mint(ctx)
+		credID, opt, err := ts.pinCredentials(ctx)
+		if err != nil {
+			ts.setLastError(err)
+			return
+		}
+		tok, err := ts.mint(ctx, opt)
 		ts.setLastError(err)
 		if err != nil {
 			return
 		}
-		ts.writeCache(tok)
+		ts.writeCache(tok, credID)
 	}()
 }
 
 // mint always calls STS for a fresh token, bypassing the cache.
-func (ts *TokenSource) mint(ctx context.Context) (string, error) {
+func (ts *TokenSource) mint(ctx context.Context, optFns ...func(*sts.Options)) (string, error) {
 	alg := ts.signingAlgorithm
 	secs := int32(ts.duration / time.Second)
 	out, err := ts.client.GetWebIdentityToken(ctx, &sts.GetWebIdentityTokenInput{
 		Audience:         []string{ts.audience},
 		SigningAlgorithm: &alg,
 		DurationSeconds:  &secs,
-	})
+	}, optFns...)
 	if err != nil {
 		return "", fmt.Errorf("awsauth: GetWebIdentityToken: %w", err)
 	}
@@ -304,16 +368,38 @@ func (ts *TokenSource) mint(ctx context.Context) (string, error) {
 	return *out.WebIdentityToken, nil
 }
 
-// readCache returns a cached token, and its expiry, if the file holds one whose
-// audience matches and which has not yet expired. Any problem (missing file,
-// unparseable token, wrong audience, already expired) is a miss, not an error —
-// the caller then mints a fresh token.
-func (ts *TokenSource) readCache() (token string, exp time.Time, ok bool) {
+// cacheVersion tags the on-disk format. It deliberately contains dots: earlier
+// library versions stored a bare JWT and accepted any file that split into
+// exactly three dot-separated parts, so the extra dots guarantee they reject
+// (rather than misread) an envelope sharing the same path.
+const cacheVersion = "awsauth.cache.v2"
+
+// cacheEntry is the on-disk cache format. Credential is the fingerprint of the
+// AWS credentials that minted Token.
+type cacheEntry struct {
+	Version    string `json:"v"`
+	Credential string `json:"credential"`
+	Token      string `json:"token"`
+}
+
+// readCache returns a cached token, and its expiry, if the file holds one minted
+// by the credentials identified by credID, whose audience matches and which has
+// not yet expired. Any problem (missing file, unparseable entry or token, other
+// credentials, wrong audience, already expired) is a miss, not an error — the
+// caller then mints a fresh token.
+func (ts *TokenSource) readCache(credID string) (token string, exp time.Time, ok bool) {
 	b, err := os.ReadFile(ts.cachePath)
 	if err != nil {
 		return "", time.Time{}, false
 	}
-	tok := strings.TrimSpace(string(b))
+	var entry cacheEntry
+	if err := json.Unmarshal(b, &entry); err != nil {
+		return "", time.Time{}, false
+	}
+	if entry.Version != cacheVersion || entry.Credential != credID {
+		return "", time.Time{}, false
+	}
+	tok := strings.TrimSpace(entry.Token)
 	if tok == "" {
 		return "", time.Time{}, false
 	}
@@ -330,9 +416,14 @@ func (ts *TokenSource) readCache() (token string, exp time.Time, ok bool) {
 	return tok, exp, true
 }
 
-// writeCache atomically stores tok at cachePath (0600 file, 0700 parent). It is
-// best effort: any error is ignored, since the token itself is already valid.
-func (ts *TokenSource) writeCache(tok string) {
+// writeCache atomically stores tok, bound to credID, at cachePath (0600 file,
+// 0700 parent). It is best effort: any error is ignored, since the token itself
+// is already valid.
+func (ts *TokenSource) writeCache(tok, credID string) {
+	data, err := json.Marshal(cacheEntry{Version: cacheVersion, Credential: credID, Token: tok})
+	if err != nil {
+		return
+	}
 	dir := filepath.Dir(ts.cachePath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return
@@ -347,7 +438,7 @@ func (ts *TokenSource) writeCache(tok string) {
 		_ = tmp.Close()
 		return
 	}
-	if _, err := tmp.WriteString(tok); err != nil {
+	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		return
 	}
@@ -399,13 +490,16 @@ func (ts *TokenSource) setLastError(err error) {
 // DefaultCachePath returns a per-audience cache file path under the user cache
 // directory (os.UserCacheDir), suitable for Config.CachePath. Distinct audiences
 // map to distinct files, so reusing it for several audiences will not collide.
+// The path does not encode the AWS principal; isolation between credentials is
+// provided by the credential binding stored inside the cache file. The name is
+// versioned so it never collides with files of earlier library versions.
 func DefaultCachePath(audience string) (string, error) {
 	dir, err := os.UserCacheDir()
 	if err != nil {
 		return "", fmt.Errorf("awsauth: locate user cache dir: %w", err)
 	}
 	sum := sha256.Sum256([]byte(audience))
-	name := "awsauth-" + hex.EncodeToString(sum[:8]) + ".jwt"
+	name := "awsauth-" + hex.EncodeToString(sum[:8]) + "-v2.jwt"
 	return filepath.Join(dir, "nats-oidc-callout", name), nil
 }
 

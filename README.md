@@ -256,6 +256,17 @@ not expired; within `CacheRefreshBefore` of expiry (default 10s) it returns the
 cached token and mints a replacement in the background. `NewFromAWSConfig` takes
 a pre-built `aws.Config` for custom region/profile/credentials.
 
+Cache scope: each cache entry is bound to the AWS credentials that minted it (a
+hash of the access key ID is stored beside the token), so switching AWS profile,
+role or account never reuses the previous principal's token; the entry is simply
+replaced. Processes share an entry while they resolve the same access key ID
+(long-lived keys, cached SSO credentials). A profile that runs `sts:AssumeRole`
+on every process start gets new keys each time and will not hit the cache. The
+bound credentials are fetched through the SDK's credential cache, so a cache hit
+costs no extra STS call. `DefaultCachePath` only separates audiences. To
+invalidate manually, delete the cache file. Cache files written by earlier
+versions (raw token, no credential binding) are ignored and overwritten.
+
 ### `lib/k8sauth`
 
 In-pod, project a token whose **audience matches the callout** (the default SA
