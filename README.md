@@ -391,10 +391,36 @@ It serves:
 - `nats_oidc_callout_authorization_requests_total{result="allowed|denied"}`
 - `nats_oidc_callout_authorization_denials_total{reason="no_token|verification_failed|policy_no_match|signing_failed"}`
 - `nats_oidc_callout_authorization_duration_seconds` (histogram)
+- `nats_oidc_callout_nats_connected` — 1 while the service's own NATS
+  connection is up, 0 otherwise.
 - standard Go runtime / process metrics.
+
+The same listener serves two health endpoints:
+
+- `/healthz` (liveness) answers 200 while the process is up. It does not depend
+  on NATS, so a broker outage doesn't cause restart storms.
+- `/readyz` (readiness) answers 200 only while the NATS connection is up and the
+  callout service is running, 503 otherwise.
+
+`metrics.path` must be a literal absolute path that does not resolve to
+`/healthz` or `/readyz` (percent-encoded or uncleaned spellings included).
 
 Disabled by default — no listener is opened and nothing is collected unless
 `metrics.enabled` is true.
+
+## NATS connection lifecycle
+
+The service connects to NATS once at startup and exits with an error if that
+fails. After that it reconnects **indefinitely** (2s between rounds plus
+jitter), logging each disconnect and reconnect; authorization resumes as soon
+as the broker is reachable again. The process exits non-zero, so its
+supervisor (systemd `Restart=on-failure`, Kubernetes) restarts it, when:
+
+- the connection is nevertheless closed for good, for example because the
+  broker rejects the service's credentials twice in a row on reconnect;
+- the broker revokes the service's subscription to `$SYS.REQ.USER.AUTH` (a
+  permissions change on reload) while the connection stays up;
+- the callout service stops.
 
 ## Security notes
 

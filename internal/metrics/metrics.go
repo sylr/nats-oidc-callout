@@ -8,6 +8,7 @@ package metrics
 
 import (
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -31,6 +32,9 @@ type Metrics struct {
 	requests *prometheus.CounterVec // label: result (allowed|denied)
 	denials  *prometheus.CounterVec // label: reason
 	duration prometheus.Histogram
+	// natsConnected reports the NATS connection state, read at collection
+	// time; nil until TrackNATSConnection is called.
+	natsConnected atomic.Pointer[func() bool]
 }
 
 // New creates a Metrics with its own registry, also registering the standard Go
@@ -56,7 +60,17 @@ func New() *Metrics {
 			Buckets:   prometheus.DefBuckets,
 		}),
 	}
-	reg.MustRegister(m.requests, m.denials, m.duration)
+	natsUp := prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Name:      "nats_connected",
+		Help:      "Whether the service's own NATS connection is currently connected (1) or not (0).",
+	}, func() float64 {
+		if fn := m.natsConnected.Load(); fn != nil && (*fn)() {
+			return 1
+		}
+		return 0
+	})
+	reg.MustRegister(m.requests, m.denials, m.duration, natsUp)
 	reg.MustRegister(collectors.NewGoCollector())
 	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
@@ -92,4 +106,13 @@ func (m *Metrics) RecordDenied(reason string, d time.Duration) {
 	m.requests.WithLabelValues("denied").Inc()
 	m.denials.WithLabelValues(reason).Inc()
 	m.duration.Observe(d.Seconds())
+}
+
+// TrackNATSConnection makes the nats_connected gauge report isConnected,
+// evaluated at each scrape (e.g. (*nats.Conn).IsConnected). Nil-safe.
+func (m *Metrics) TrackNATSConnection(isConnected func() bool) {
+	if m == nil {
+		return
+	}
+	m.natsConnected.Store(&isConnected)
 }

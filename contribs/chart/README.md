@@ -6,8 +6,8 @@ NATS user JWTs.
 
 The service is a **NATS client**: it connects *out* to your NATS server and
 answers requests on `$SYS.REQ.USER.AUTH`. It exposes no inbound application
-traffic — only an optional Prometheus metrics endpoint — so the chart ships no
-Ingress and no client-facing Service.
+traffic — only an optional Prometheus metrics endpoint, which also serves the
+health probes — so the chart ships no Ingress and no client-facing Service.
 
 ## Install
 
@@ -86,11 +86,30 @@ with such a key is rejected while the previous config keeps serving.
 | `metrics.enabled` | `true` | Create the metrics Service + container port/probes |
 | `metrics.port` | `9090` | Must match `config.values.metrics.address` |
 | `metrics.serviceMonitor.enabled` | `false` | Create a Prometheus Operator ServiceMonitor |
+| `livenessProbe.enabled` | `true` | HTTP `GET /healthz` on the metrics port (requires `metrics.enabled`) |
+| `readinessProbe.enabled` | `true` | HTTP `GET /readyz` on the metrics port (requires `metrics.enabled`) |
 | `restartOnConfigChange` | `true` | Roll pods when the rendered config/policy changes |
 | `podDisruptionBudget.enabled` | `false` | Create a PDB (useful with >1 replica) |
 | `resources` | 25m / 32Mi req | Container resources |
 
 See [`values.yaml`](./values.yaml) for the complete list.
+
+## Health probes
+
+The probes are served by the same HTTP server as the metrics, so they need
+`metrics.enabled: true` (and `config.values.metrics.enabled: true`).
+
+- **Liveness** (`/healthz`) answers 200 while the process is up. It does not
+  depend on NATS, so a broker outage does not restart the pod.
+- **Readiness** (`/readyz`) answers 200 only while the service's NATS
+  connection is up and the callout service is running, 503 otherwise. During a
+  broker outage the pod turns unready and the client keeps reconnecting; it
+  becomes ready again on its own once the broker is back.
+
+The service never gives up reconnecting. If the connection is closed for good
+anyway (for instance the broker rejects the service's credentials twice in a
+row), or the broker revokes the service's subscription to `$SYS.REQ.USER.AUTH`,
+the process exits non-zero and Kubernetes restarts the container.
 
 ## Config reload
 

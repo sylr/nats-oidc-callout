@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/sylr/nats-oidc-callout/internal/authz"
+	"github.com/sylr/nats-oidc-callout/internal/metrics"
 )
 
 // Config is the top-level service configuration, loaded from a YAML file and
@@ -64,6 +65,9 @@ type MetricsConfig struct {
 	// to DefaultMetricsAddress when enabled and unset.
 	Address string `yaml:"address"`
 	// Path is the HTTP path the metrics are served at. Defaults to "/metrics".
+	// The same endpoint also serves /healthz (liveness) and /readyz
+	// (readiness), so Path may not resolve to either of those (see
+	// metrics.ValidatePath).
 	Path string `yaml:"path"`
 }
 
@@ -164,6 +168,11 @@ func (c *Config) Validate() error {
 	for i, iss := range c.Issuers {
 		if iss.URL == "" {
 			return fmt.Errorf("issuers[%d].url is required", i)
+		}
+	}
+	if c.Metrics.Enabled && c.Metrics.Path != "" {
+		if err := metrics.ValidatePath(c.Metrics.Path); err != nil {
+			return fmt.Errorf("metrics.path: %w", err)
 		}
 	}
 	if err := c.Policy.Validate(); err != nil {
