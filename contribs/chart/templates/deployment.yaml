@@ -44,7 +44,7 @@ spec:
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         args:
         - -config
-        - /etc/nats-oidc-callout/config.yaml
+        - /etc/nats-oidc-callout/config/config.yaml
         - -log-level
         - {{ .Values.logLevel | quote }}
         {{- with .Values.extraEnv }}
@@ -74,14 +74,17 @@ spec:
         resources:
           {{- toYaml .Values.resources | nindent 10 }}
         volumeMounts:
+        # Whole-directory mounts, deliberately NOT subPath: kubelet never updates
+        # subPath mounts, so a SIGHUP would re-read stale files. A directory
+        # mount is refreshed in place (atomic symlink swap), so a reload sent
+        # after propagation sees the new content. The two volumes need distinct
+        # directories since only one volume can be mounted at a given path.
         - name: config
-          mountPath: /etc/nats-oidc-callout/config.yaml
-          subPath: config.yaml
+          mountPath: /etc/nats-oidc-callout/config
           readOnly: true
         {{- if include "nats-oidc-callout.policyEnabled" . }}
         - name: policy
-          mountPath: /etc/nats-oidc-callout/policy.yaml
-          subPath: {{ include "nats-oidc-callout.policyConfigMapKey" . }}
+          mountPath: /etc/nats-oidc-callout/policy
           readOnly: true
         {{- end }}
         {{- with .Values.extraVolumeMounts }}
