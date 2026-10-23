@@ -329,7 +329,7 @@ func connectNATS(cfg config.NATSConfig, logger *slog.Logger) (*nats.Conn, <-chan
 	}
 	authSubViolation := fmt.Sprintf("Subscription to %q", callout.SysRequestUserAuthSubj)
 	opts := []nats.Option{
-		nats.Name("nats-oidc-callout"),
+		nats.Name("nats-oidc-callout/" + version),
 		nats.MaxReconnects(-1),
 		nats.ReconnectWait(natsReconnectWait),
 		nats.ReconnectJitter(natsReconnectJitter, natsReconnectJitterTLS),
