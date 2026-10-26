@@ -138,7 +138,9 @@ func TestHealthEndpoints(t *testing.T) {
 	go func() { done <- m.Serve(ctx, ln, "/metrics", ready.Load, nil) }()
 	t.Cleanup(func() {
 		cancel()
-		<-done
+		if err := <-done; err != nil {
+			t.Errorf("Serve returned error on shutdown: %v", err)
+		}
 	})
 
 	base := "http://" + ln.Addr().String()
