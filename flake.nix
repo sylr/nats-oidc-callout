@@ -65,7 +65,7 @@
 
           stablePackages = with pkgs; [
             gh
-            go_1_26     # bootstrap; go.mod's `go 1.26.10` directive selects the exact toolchain
+            go_1_27     # bootstrap; go.mod's `go 1.27.3` directive selects the exact toolchain
             goreleaser  # release-config check (ci goreleaser-check)
             kind        # k8s e2e: spins up the ephemeral cluster (test/k8s/run.sh)
             kubectl     # k8s e2e: applies manifests, waits on the client jobs
@@ -95,10 +95,10 @@
           # The Go compiler is selected by go.mod's directive (GOTOOLCHAIN); the
           # pinned go here only bootstraps it.
           ci-test = pkgs.mkShell {
-            packages = [ pkgs.go_1_26 pkgs-unstable.golangci-lint ];
+            packages = [ pkgs.go_1_27 pkgs-unstable.golangci-lint ];
           };
           ci-github-oidc-e2e = pkgs.mkShell {
-            packages = [ pkgs.go_1_26 ];
+            packages = [ pkgs.go_1_27 ];
           };
           ci-goreleaser-check = pkgs.mkShell {
             packages = [ pkgs.goreleaser ];
@@ -115,7 +115,7 @@
           ci-release = pkgs.mkShell {
             # goreleaser builds the Go binaries (go) and the SBOMs (syft).
             # buildx/qemu/docker for the container images come from the runner.
-            packages = [ pkgs.go_1_26 pkgs.goreleaser pkgs.syft ];
+            packages = [ pkgs.go_1_27 pkgs.goreleaser pkgs.syft ];
           };
         }
       );
