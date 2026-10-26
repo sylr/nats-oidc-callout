@@ -104,29 +104,32 @@ func TestLoadEmptyFile(t *testing.T) {
 // win over the other.
 func TestLoadNATSAuthMethods(t *testing.T) {
 	const (
-		creds = "\n  credentials: \"/etc/nats/auth.creds\""
-		user  = "\n  username: \"auth\"\n  password: \"secret\""
-		nkey  = "\n  nkey_seed: \"SU-not-parsed-by-load\""
+		creds    = "\n  credentials: \"/etc/nats/auth.creds\""
+		user     = "\n  username: \"auth\"\n  password: \"secret\""
+		password = "\n  password: \"secret\""
+		nkey     = "\n  nkey_seed: \"SU-not-parsed-by-load\""
 	)
 	for name, tc := range map[string]struct {
 		auth    string
-		wantErr bool
+		wantErr string
 	}{
-		"none":                 {auth: ""},
-		"credentials":          {auth: creds},
-		"username":             {auth: user},
-		"nkey":                 {auth: nkey},
-		"credentials and user": {auth: creds + user, wantErr: true},
-		"credentials and nkey": {auth: creds + nkey, wantErr: true},
-		"username and nkey":    {auth: user + nkey, wantErr: true},
+		"none":                      {auth: ""},
+		"credentials":               {auth: creds},
+		"username":                  {auth: user},
+		"nkey":                      {auth: nkey},
+		"credentials and user":      {auth: creds + user, wantErr: "mutually exclusive"},
+		"credentials and nkey":      {auth: creds + nkey, wantErr: "mutually exclusive"},
+		"username and nkey":         {auth: user + nkey, wantErr: "mutually exclusive"},
+		"password without username": {auth: password, wantErr: "requires nats.username"},
+		"password next to an nkey":  {auth: nkey + password, wantErr: "requires nats.username"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			const url = `  url: "nats://127.0.0.1:4222"`
 			body := strings.Replace(validConfig, url, url+tc.auth, 1)
 			cfg, err := Load(writeFile(t, t.TempDir(), "config.yaml", body))
-			if tc.wantErr {
-				if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
-					t.Fatalf("err = %v, want a mutually exclusive error", err)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want an error containing %q", err, tc.wantErr)
 				}
 				return
 			}

@@ -197,6 +197,11 @@ func (c *Config) Validate() error {
 	if authMethods > 1 {
 		return fmt.Errorf("nats.credentials, nats.username and nats.nkey_seed are mutually exclusive")
 	}
+	// Without a username the password is never sent and the service would
+	// connect anonymously.
+	if c.NATS.Password != "" && c.NATS.Username == "" {
+		return fmt.Errorf("nats.password requires nats.username")
+	}
 	if c.IssuerAccountSeed == "" {
 		return fmt.Errorf("issuer_account_seed is required")
 	}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,24 +17,13 @@ import (
 	"github.com/sylr/nats-oidc-callout/internal/config"
 )
 
-// TestConnectNATSWithNkey checks that the service connects as an auth callout
-// user identified by its nkey rather than by a username.
-func TestConnectNATSWithNkey(t *testing.T) {
-	userKP, err := nkeys.CreateUser()
-	if err != nil {
-		t.Fatalf("create user key: %v", err)
-	}
-	userSeed, _ := userKP.Seed()
-	userPub, _ := userKP.PublicKey()
-	accountKP, err := nkeys.CreateAccount()
-	if err != nil {
-		t.Fatalf("create account key: %v", err)
-	}
-	accountPub, _ := accountKP.PublicKey()
-
+// startNkeyServer starts an embedded server on port (random when -1) whose
+// auth callout user is identified only by the public nkey userPub.
+func startNkeyServer(t *testing.T, port int, userPub, accountPub string) *server.Server {
+	t.Helper()
 	conf := filepath.Join(t.TempDir(), "server.conf")
 	if err := os.WriteFile(conf, fmt.Appendf(nil, `
-listen: 127.0.0.1:-1
+listen: 127.0.0.1:%d
 accounts {
   AUTH { users: [ { nkey: %q } ] }
   APP {}
@@ -47,7 +37,7 @@ authorization {
     auth_users: [ %q ]
   }
 }
-`, userPub, accountPub, userPub), 0o600); err != nil {
+`, port, userPub, accountPub, userPub), 0o600); err != nil {
 		t.Fatalf("write server conf: %v", err)
 	}
 	opts, err := server.ProcessConfigFile(conf)
@@ -65,6 +55,27 @@ authorization {
 		t.Fatal("server not ready")
 	}
 	t.Cleanup(srv.Shutdown)
+	return srv
+}
+
+// TestConnectNATSWithNkey checks that the service connects as an auth callout
+// user identified by its nkey rather than by a username, and authenticates
+// again after a server restart, signing the new server's nonce.
+func TestConnectNATSWithNkey(t *testing.T) {
+	userKP, err := nkeys.CreateUser()
+	if err != nil {
+		t.Fatalf("create user key: %v", err)
+	}
+	userSeed, _ := userKP.Seed()
+	userPub, _ := userKP.PublicKey()
+	accountKP, err := nkeys.CreateAccount()
+	if err != nil {
+		t.Fatalf("create account key: %v", err)
+	}
+	accountPub, _ := accountKP.PublicKey()
+
+	srv := startNkeyServer(t, -1, userPub, accountPub)
+	port := srv.Addr().(*net.TCPAddr).Port
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	nc, _, err := connectNATS(config.NATSConfig{URL: srv.ClientURL(), NkeySeed: string(userSeed)}, logger)
@@ -74,6 +85,18 @@ authorization {
 	defer nc.Close()
 	if !nc.IsConnected() {
 		t.Fatalf("status = %v, want connected", nc.Status())
+	}
+
+	srv.Shutdown()
+	srv.WaitForShutdown()
+	startNkeyServer(t, port, userPub, accountPub)
+
+	deadline := time.Now().Add(15 * time.Second)
+	for nc.Stats().Reconnects == 0 || !nc.IsConnected() {
+		if time.Now().After(deadline) {
+			t.Fatalf("not reconnected within 15s: status %v, last error %v", nc.Status(), nc.LastError())
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 

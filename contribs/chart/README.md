@@ -35,10 +35,20 @@ keys, nested `issuers`, etc.).
 Don't commit seeds into `values.yaml`. Either inject at install time:
 
 ```sh
-helm install my-callout deploy/chart \
+helm install my-callout contribs/chart \
   --set-file config.values.issuer_account_seed=./issuer.seed \
   --set config.values.xkey_seed="$XKEY_SEED" \
+  --set config.values.nats.username=auth \
   --set config.values.nats.password="$NATS_PASSWORD"
+```
+
+The chart sets no NATS authentication by default. Set exactly one of
+`nats.username`/`nats.password`, `nats.nkey_seed` or `nats.credentials`; the
+service refuses to start with more than one. For an nkey, replace the two
+`nats.*` flags above with:
+
+```sh
+  --set-file config.values.nats.nkey_seed=./auth-user.seed
 ```
 
 …or manage the Secret yourself and reference it:
@@ -154,3 +164,25 @@ it, and pods would otherwise fail to load the policy. The `-config` path is
 handled by the chart itself. `extraVolumeMounts` that reused the chart's `policy`
 or `config` volume via `subPath` keep working, but their files will not refresh
 either.
+
+## Upgrading
+
+### NATS authentication no longer has defaults
+
+The chart used to default `config.values.nats.username` to `auth` and
+`config.values.nats.password` to `change-me`. It now sets neither, so that an
+override can pick `nats.nkey_seed` or `nats.credentials` without inheriting a
+username. If your values only set `config.values.nats.password` and relied on the
+default username, add it explicitly before upgrading:
+
+```yaml
+config:
+  values:
+    nats:
+      username: auth
+```
+
+Otherwise the pod fails to start with `nats.password requires nats.username`.
+With `config.existingSecret` the chart defaults do not apply, but the service
+applies the same check to your Secret's config: a `password` without a
+`username` there fails too.

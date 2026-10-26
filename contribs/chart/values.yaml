@@ -44,10 +44,13 @@ config:
   values:
     nats:
       url: "tls://nats:4222"
-      username: "auth"
-      password: "change-me"
-      # Or a user nkey seed (SU…) instead of username/password:
-      # nkey_seed: ""
+      # Set exactly one authentication method. None is set by default: Helm
+      # merges overrides into these defaults, so a default username would
+      # remain next to an nkey_seed or credentials set in an override.
+      # username: "auth"
+      # password: ""
+      # nkey_seed: ""     # user nkey seed (SU…)
+      # credentials: ""   # path to a .creds file mounted in the pod
       # ca_cert: "/etc/nats-oidc-callout/tls/ca.pem"
       # client_cert: "/etc/nats-oidc-callout/tls/client.pem"
       # client_key: "/etc/nats-oidc-callout/tls/client-key.pem"
