@@ -19,8 +19,8 @@ logLevel: info
 # -- Service configuration --------------------------------------------------
 #
 # The service is driven by a single config file (-config). That file holds
-# secrets (issuer_account_seed, xkey_seed, nats.password), so the chart renders
-# the whole thing into a Secret.
+# secrets (issuer_account_seed, xkey_seed, nats.password or nats.nkey_seed), so
+# the chart renders the whole thing into a Secret.
 #
 # `config.values` is passed through VERBATIM as the rendered config.yaml — use
 # the exact schema from examples/config.yaml in the repo (snake_case keys,
@@ -46,6 +46,8 @@ config:
       url: "tls://nats:4222"
       username: "auth"
       password: "change-me"
+      # Or a user nkey seed (SU…) instead of username/password:
+      # nkey_seed: ""
       # ca_cert: "/etc/nats-oidc-callout/tls/ca.pem"
       # client_cert: "/etc/nats-oidc-callout/tls/client.pem"
       # client_key: "/etc/nats-oidc-callout/tls/client-key.pem"

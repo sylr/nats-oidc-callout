@@ -86,12 +86,16 @@ type MetricsConfig struct {
 	Path string `yaml:"path"`
 }
 
-// NATSConfig holds the callout service's own connection to NATS.
+// NATSConfig holds the callout service's own connection to NATS. At most one
+// authentication method may be set: Credentials, Username/Password or NkeySeed.
 type NATSConfig struct {
 	URL         string `yaml:"url"`
 	Credentials string `yaml:"credentials"` // path to a .creds file
 	Username    string `yaml:"username"`
 	Password    string `yaml:"password"`
+	// NkeySeed is a user nkey seed (SU…). The server must list its public key
+	// (U…) as a user of the auth callout account and in auth_users.
+	NkeySeed string `yaml:"nkey_seed"`
 	// TLS enables and configures TLS for the service connection. The AWS token
 	// is a bearer credential, so TLS is strongly recommended.
 	CACert     string `yaml:"ca_cert"`
@@ -183,6 +187,15 @@ func Load(path string) (*Config, error) {
 func (c *Config) Validate() error {
 	if c.NATS.URL == "" {
 		return fmt.Errorf("nats.url is required")
+	}
+	authMethods := 0
+	for _, v := range []string{c.NATS.Credentials, c.NATS.Username, c.NATS.NkeySeed} {
+		if v != "" {
+			authMethods++
+		}
+	}
+	if authMethods > 1 {
+		return fmt.Errorf("nats.credentials, nats.username and nats.nkey_seed are mutually exclusive")
 	}
 	if c.IssuerAccountSeed == "" {
 		return fmt.Errorf("issuer_account_seed is required")

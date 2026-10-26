@@ -15,6 +15,11 @@ nats:
   url: "tls://127.0.0.1:4222"
   username: "auth"
   password: "change-me"
+  # Alternatively authenticate with a user nkey instead of username/password
+  # (or a `credentials` .creds file); the methods are mutually exclusive. The
+  # server must list the public key (U…) as an AUTH user and in auth_users.
+  # Generate one with `nk -gen user -pubout`.
+  # nkey_seed: "SU…"
   # For production prefer TLS; the OIDC token is a bearer credential.
   # ca_cert: "/etc/nats/ca.pem"
   # client_cert: "/etc/nats/client.pem"

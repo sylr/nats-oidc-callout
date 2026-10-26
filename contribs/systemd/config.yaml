@@ -13,6 +13,8 @@ nats:
   url: "tls://127.0.0.1:4222"
   username: "auth"
   password: "REPLACE_ME"
+  # Or a user nkey seed (SU…) instead of username/password:
+  # nkey_seed: "REPLACE_ME"
   # ca_cert: "/etc/nats-oidc-callout/ca.pem"
 
 # Account nkey seed (SA…); its public key must equal auth_callout.issuer on the

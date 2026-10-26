@@ -22,7 +22,8 @@ helm install my-callout oci://ghcr.io/sylr/helm-charts/nats-oidc-callout --versi
 ## Configuration model
 
 The binary is driven by a single config file (`-config`). That file contains
-secrets (`issuer_account_seed`, `xkey_seed`, `nats.password`), so the chart
+secrets (`issuer_account_seed`, `xkey_seed`, `nats.password` or
+`nats.nkey_seed`), so the chart
 renders the **whole config into a Secret**.
 
 `config.values` is passed through *verbatim* as `config.yaml` — use the exact

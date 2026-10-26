@@ -362,6 +362,12 @@ func connectNATS(cfg config.NATSConfig, logger *slog.Logger) (*nats.Conn, <-chan
 		opts = append(opts, nats.UserCredentials(cfg.Credentials))
 	case cfg.Username != "":
 		opts = append(opts, nats.UserInfo(cfg.Username, cfg.Password))
+	case cfg.NkeySeed != "":
+		opt, err := nkeyOption(cfg.NkeySeed)
+		if err != nil {
+			return nil, nil, err
+		}
+		opts = append(opts, opt)
 	}
 
 	tlsCfg, err := tlsConfig(cfg)
@@ -377,6 +383,23 @@ func connectNATS(cfg config.NATSConfig, logger *slog.Logger) (*nats.Conn, <-chan
 		return nil, nil, err
 	}
 	return nc, failed, nil
+}
+
+// nkeyOption authenticates with a user nkey: the seed signs the nonce the
+// server sends on each (re)connect.
+func nkeyOption(seed string) (nats.Option, error) {
+	kp, err := nkeys.FromSeed([]byte(seed))
+	if err != nil {
+		return nil, fmt.Errorf("load nkey seed: %w", err)
+	}
+	pub, err := kp.PublicKey()
+	if err != nil {
+		return nil, fmt.Errorf("load nkey seed: %w", err)
+	}
+	if !nkeys.IsValidPublicUserKey(pub) {
+		return nil, errors.New("nkey seed is not a user seed (SU…)")
+	}
+	return nats.Nkey(pub, kp.Sign), nil
 }
 
 func tlsConfig(cfg config.NATSConfig) (*tls.Config, error) {

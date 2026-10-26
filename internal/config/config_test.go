@@ -99,6 +99,47 @@ func TestLoadEmptyFile(t *testing.T) {
 	}
 }
 
+// TestLoadNATSAuthMethods checks that the service connection accepts any single
+// authentication method and refuses a combination, where one would silently
+// win over the other.
+func TestLoadNATSAuthMethods(t *testing.T) {
+	const (
+		creds = "\n  credentials: \"/etc/nats/auth.creds\""
+		user  = "\n  username: \"auth\"\n  password: \"secret\""
+		nkey  = "\n  nkey_seed: \"SU-not-parsed-by-load\""
+	)
+	for name, tc := range map[string]struct {
+		auth    string
+		wantErr bool
+	}{
+		"none":                 {auth: ""},
+		"credentials":          {auth: creds},
+		"username":             {auth: user},
+		"nkey":                 {auth: nkey},
+		"credentials and user": {auth: creds + user, wantErr: true},
+		"credentials and nkey": {auth: creds + nkey, wantErr: true},
+		"username and nkey":    {auth: user + nkey, wantErr: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			const url = `  url: "nats://127.0.0.1:4222"`
+			body := strings.Replace(validConfig, url, url+tc.auth, 1)
+			cfg, err := Load(writeFile(t, t.TempDir(), "config.yaml", body))
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+					t.Fatalf("err = %v, want a mutually exclusive error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if tc.auth == nkey && cfg.NATS.NkeySeed != "SU-not-parsed-by-load" {
+				t.Errorf("nkey_seed = %q", cfg.NATS.NkeySeed)
+			}
+		})
+	}
+}
+
 // TestLoadRejectsReservedMetricsPath checks that a metrics path ServeMux would
 // treat as one of the health endpoints is refused at load time instead of
 // panicking when the endpoint starts.

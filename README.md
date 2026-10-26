@@ -93,6 +93,15 @@ nk -inkey account.seed -pubout    # → account public key (A…)
   `xkey_seed` (see [`examples/config.yaml`](examples/config.yaml)). Keep seeds in
   a secret store; never commit them.
 
+The service itself connects to NATS as one of the `auth_callout.auth_users`,
+with exactly one of `nats.username`/`nats.password`, a `nats.credentials` file,
+or a user nkey in `nats.nkey_seed`. For an nkey:
+
+```sh
+nk -gen user -pubout      # line 1: user seed   (SU…)   → nats.nkey_seed
+                          # line 2: user public (U…)    → AUTH user `nkey` and auth_users
+```
+
 Define authorization in a policy file ([`examples/policy.yaml`](examples/policy.yaml)).
 Rules are evaluated in order; the first match wins; no match denies.
 
