@@ -16,7 +16,7 @@ permissions:
 # and building the release. Docker (qemu/buildx/login) stays as runner setup.
 jobs:
   goreleaser:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
     - uses: actions/checkout@v7
       with:
@@ -71,7 +71,7 @@ jobs:
   # that way and refuses to continue unless the packaged chart renders the
   # exact image reference goreleaser published.
   helm-chart:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: goreleaser
     steps:
     - uses: actions/checkout@v7
