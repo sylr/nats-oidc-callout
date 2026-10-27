@@ -16,7 +16,7 @@ permissions:
 # go.mod's `go` directive (GOTOOLCHAIN), which the pinned go bootstraps.
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # No id-token: write here on purpose — the real-GitHub-OIDC e2e
     # (TestGitHubActionsToken) self-skips without the token endpoint and runs
     # in the dedicated github-oidc-e2e job below instead.
@@ -48,7 +48,7 @@ jobs:
           echo "gocache=$(printf '%s\n' "$out" | sed -n 1p)"
           echo "gomodcache=$(printf '%s\n' "$out" | sed -n 2p)"
         } >> "$GITHUB_OUTPUT"
-    - uses: actions/cache@v4
+    - uses: actions/cache@v6
       with:
         path: |
           ${{ steps.go-cache.outputs.gocache }}
@@ -100,7 +100,7 @@ jobs:
       run: nix develop .#ci-test --command go build ./...
 
   github-oidc-e2e:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       # Exposes ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN so TestGitHubActionsToken can
@@ -132,7 +132,7 @@ jobs:
           echo "gocache=$(printf '%s\n' "$out" | sed -n 1p)"
           echo "gomodcache=$(printf '%s\n' "$out" | sed -n 2p)"
         } >> "$GITHUB_OUTPUT"
-    - uses: actions/cache@v4
+    - uses: actions/cache@v6
       with:
         # Same path list and key as the test job so the two jobs share one Go
         # cache (golangci-lint dir included only for parity; unused here).
@@ -148,7 +148,7 @@ jobs:
       run: nix develop .#ci-github-oidc-e2e --command go test -race -count=1 -v -run TestGitHubActionsToken ./test/e2e/...
 
   goreleaser-check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
     - uses: actions/checkout@v7
     - uses: cachix/install-nix-action@v31
@@ -169,7 +169,7 @@ jobs:
       run: nix develop .#ci-goreleaser-check --command goreleaser check
 
   k8s-e2e:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Uses the Docker daemon preinstalled on the runner; kind and kubectl come
     # from the Nix dev shell. run.sh creates a kind cluster, builds + loads the
     # callout image, deploys NATS + callout, and asserts the projected
@@ -199,7 +199,7 @@ jobs:
       run: nix develop .#ci-k8s-e2e --command bash test/k8s/run.sh
 
   helm:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
     - uses: actions/checkout@v7
     - uses: cachix/install-nix-action@v31
