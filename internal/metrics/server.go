@@ -26,6 +26,9 @@ const (
 	ReadinessPath = "/readyz"
 )
 
+// shutdownTimeout bounds the graceful drain once Serve's context is cancelled.
+const shutdownTimeout = 5 * time.Second
+
 // Serve exposes the metrics handler at path, plus the LivenessPath and
 // ReadinessPath health endpoints, on the given listener until ctx is cancelled,
 // then shuts the server down gracefully. ready reports readiness; nil means
@@ -54,9 +57,17 @@ func (m *Metrics) Serve(ctx context.Context, ln net.Listener, path string, ready
 
 	select {
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
-		return srv.Shutdown(shutdownCtx)
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			// Shutdown counts a connection that has not sent a request yet
+			// (e.g. one a client's transport dialed speculatively and never
+			// used) as active for 5s, so the drain can time out with nothing
+			// in flight. Force-close whatever is left rather than fail.
+			logger.Warn("metrics server drain timed out, closing remaining connections", "error", err)
+			return srv.Close()
+		}
+		return nil
 	case err := <-errCh:
 		return err
 	}
