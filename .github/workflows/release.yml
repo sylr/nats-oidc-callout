@@ -46,10 +46,21 @@ jobs:
 
     # goreleaser (and the syft it shells out to for SBOMs) comes from the Nix
     # shell -- same pinned versions as the goreleaser-check CI job.
+    #
+    # The lib/* Go modules are tagged lib/<module>/vX.Y.Z. Those tags never
+    # trigger this workflow ("v*" only matches tags starting with "v"), but
+    # goreleaser's own detection would still pick one up as the previous tag
+    # (git describe) and truncate the changelog, or as the current tag if it
+    # points at the same commit. Pin both to service tags only; the goreleaser
+    # OSS config has no tag-prefix filter (ignore_tag_prefixes is Pro-only).
     - name: Run goreleaser
-      run: nix develop .#ci-release --command goreleaser release --clean
+      run: |
+        GORELEASER_PREVIOUS_TAG="$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${GORELEASER_CURRENT_TAG}^" 2>/dev/null || true)"
+        export GORELEASER_PREVIOUS_TAG
+        nix develop .#ci-release --command goreleaser release --clean
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
 
   # Publish the Helm chart as an OCI artifact to ghcr.io alongside the image.
   # Runs after goreleaser so the chart's appVersion points at an image that has
