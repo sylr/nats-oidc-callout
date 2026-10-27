@@ -2,12 +2,15 @@ package metrics
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -90,84 +93,106 @@ func TestHandlerExposesMetrics(t *testing.T) {
 }
 
 func TestServeAndShutdown(t *testing.T) {
-	m := New()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- m.Serve(ctx, ln, "/metrics", nil, nil) }()
+	synctest.Test(t, func(t *testing.T) {
+		m := New()
+		ln := newPipeListener()
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() { done <- m.Serve(ctx, ln, "/metrics", nil, nil) }()
 
-	url := "http://" + ln.Addr().String() + "/metrics"
-	resp, err := http.Get(url)
-	if err != nil {
-		t.Fatalf("GET %s: %v", url, err)
-	}
-	b, _ := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d", resp.StatusCode)
-	}
-	if !strings.Contains(string(b), "nats_oidc_callout_authorization_requests_total") {
-		t.Error("scraped body missing the requests metric")
-	}
-
-	cancel()
-	select {
-	case err := <-done:
+		client := ln.client(t)
+		resp, err := client.Get("http://metrics/metrics")
 		if err != nil {
-			t.Errorf("Serve returned error on shutdown: %v", err)
+			t.Fatalf("GET /metrics: %v", err)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Serve did not return after context cancel")
-	}
-}
+		b, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d", resp.StatusCode)
+		}
+		if !strings.Contains(string(b), "nats_oidc_callout_authorization_requests_total") {
+			t.Error("scraped body missing the requests metric")
+		}
 
-// TestHealthEndpoints asserts liveness is unconditional while readiness follows
-// the supplied check.
-func TestHealthEndpoints(t *testing.T) {
-	m := New()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	var ready atomic.Bool
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- m.Serve(ctx, ln, "/metrics", ready.Load, nil) }()
-	t.Cleanup(func() {
 		cancel()
 		if err := <-done; err != nil {
 			t.Errorf("Serve returned error on shutdown: %v", err)
 		}
 	})
+}
 
-	base := "http://" + ln.Addr().String()
-	status := func(path string) int {
-		t.Helper()
-		resp, err := http.Get(base + path)
-		if err != nil {
-			t.Fatalf("GET %s: %v", path, err)
+// TestHealthEndpoints asserts liveness is unconditional while readiness follows
+// the supplied check.
+func TestHealthEndpoints(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := New()
+		ln := newPipeListener()
+		var ready atomic.Bool
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() { done <- m.Serve(ctx, ln, "/metrics", ready.Load, nil) }()
+
+		client := ln.client(t)
+		status := func(path string) int {
+			t.Helper()
+			resp, err := client.Get("http://metrics" + path)
+			if err != nil {
+				t.Fatalf("GET %s: %v", path, err)
+			}
+			_ = resp.Body.Close()
+			return resp.StatusCode
 		}
-		_ = resp.Body.Close()
-		return resp.StatusCode
-	}
 
-	if got := status(LivenessPath); got != http.StatusOK {
-		t.Errorf("%s = %d, want 200", LivenessPath, got)
-	}
-	if got := status(ReadinessPath); got != http.StatusServiceUnavailable {
-		t.Errorf("%s while not ready = %d, want 503", ReadinessPath, got)
-	}
+		if got := status(LivenessPath); got != http.StatusOK {
+			t.Errorf("%s = %d, want 200", LivenessPath, got)
+		}
+		if got := status(ReadinessPath); got != http.StatusServiceUnavailable {
+			t.Errorf("%s while not ready = %d, want 503", ReadinessPath, got)
+		}
 
-	ready.Store(true)
-	if got := status(ReadinessPath); got != http.StatusOK {
-		t.Errorf("%s while ready = %d, want 200", ReadinessPath, got)
-	}
-	if got := status(LivenessPath); got != http.StatusOK {
-		t.Errorf("%s = %d, want 200", LivenessPath, got)
-	}
+		ready.Store(true)
+		if got := status(ReadinessPath); got != http.StatusOK {
+			t.Errorf("%s while ready = %d, want 200", ReadinessPath, got)
+		}
+		if got := status(LivenessPath); got != http.StatusOK {
+			t.Errorf("%s = %d, want 200", LivenessPath, got)
+		}
+
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("Serve returned error on shutdown: %v", err)
+		}
+	})
+}
+
+// TestShutdownClosesUnusedConnection covers a connection that never sends a
+// request, as an HTTP transport leaves behind when it dials speculatively and
+// then reuses another connection. http.Server.Shutdown treats it as active for
+// 5s, as long as the drain timeout, so Serve must force-close it rather than
+// return the drain's deadline error.
+func TestShutdownClosesUnusedConnection(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := New()
+		ln := newPipeListener()
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() { done <- m.Serve(ctx, ln, "/metrics", nil, nil) }()
+
+		conn, err := ln.DialContext(t.Context(), "tcp", "metrics:80")
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		defer func() { _ = conn.Close() }()
+		synctest.Wait() // the server has accepted conn and is waiting for a request
+
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("Serve returned error on shutdown: %v", err)
+		}
+		if _, err := conn.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+			t.Errorf("unused connection read = %v, want EOF after shutdown", err)
+		}
+	})
 }
 
 // TestValidatePath covers paths ServeMux would route to, or refuse next to,
@@ -189,6 +214,61 @@ func TestValidatePath(t *testing.T) {
 		}
 	}
 }
+
+// pipeListener is an in-memory net.Listener whose connections are net.Pipe
+// ends. Unlike loopback sockets, goroutines blocked on them are durably
+// blocked, so synctest can advance its fake clock through server timeouts.
+type pipeListener struct {
+	conns     chan net.Conn
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+func newPipeListener() *pipeListener {
+	return &pipeListener{conns: make(chan net.Conn), closed: make(chan struct{})}
+}
+
+func (l *pipeListener) Accept() (net.Conn, error) {
+	select {
+	case c := <-l.conns:
+		return c, nil
+	case <-l.closed:
+		return nil, net.ErrClosed
+	}
+}
+
+func (l *pipeListener) Close() error {
+	l.closeOnce.Do(func() { close(l.closed) })
+	return nil
+}
+
+func (l *pipeListener) Addr() net.Addr { return pipeAddr{} }
+
+// DialContext hands the server end of a new pipe to Accept and returns the
+// client end.
+func (l *pipeListener) DialContext(ctx context.Context, _, _ string) (net.Conn, error) {
+	srv, cli := net.Pipe()
+	select {
+	case l.conns <- srv:
+		return cli, nil
+	case <-l.closed:
+		return nil, net.ErrClosed
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// client returns an HTTP client that dials l, whatever the request URL's host.
+func (l *pipeListener) client(t *testing.T) *http.Client {
+	tr := &http.Transport{DialContext: l.DialContext}
+	t.Cleanup(tr.CloseIdleConnections)
+	return &http.Client{Transport: tr}
+}
+
+type pipeAddr struct{}
+
+func (pipeAddr) Network() string { return "pipe" }
+func (pipeAddr) String() string  { return "pipe" }
 
 func scrape(t *testing.T, h http.Handler) string {
 	t.Helper()
